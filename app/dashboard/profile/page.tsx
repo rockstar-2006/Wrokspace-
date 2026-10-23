@@ -200,6 +200,9 @@ export default function CompleteProfilePage() {
       merged.skills = [];
     }
 
+    if (!merged.college) {
+      merged.college = "Shri Madhwa Vadiraja Institute of Technology & Management";
+    }
     if (merged.email === "student.google@projecthub.edu") merged.email = "";
     if (merged.fullName === "Student User") merged.fullName = "";
     if (merged.photoURL?.includes("unsplash.com/photo-1535713875002")) merged.photoURL = "";
@@ -778,13 +781,12 @@ export default function CompleteProfilePage() {
                           College / Institution <span className="text-red-500">*</span>
                         </label>
                         <select
-                          value={formData.college}
+                          value={formData.college || "Shri Madhwa Vadiraja Institute of Technology & Management"}
                           onChange={(e) =>
                             setFormData({ ...formData, college: e.target.value })
                           }
                           className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-xs text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium truncate"
                         >
-                          <option value="">Select College / Institution</option>
                           {COLLEGE_OPTIONS.map((c) => (
                             <option key={c} value={c}>
                               {c}

@@ -1061,10 +1061,10 @@ export default function AddNewProjectPage() {
                       </label>
                       <input
                         type="text"
-                        value={college}
-                        onChange={(e) => setCollege(e.target.value)}
-                        placeholder="Enter your college or institution"
-                        className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-xs sm:text-sm text-slate-800 focus:outline-none focus:border-indigo-500"
+                        value="Shri Madhwa Vadiraja Institute of Technology & Management"
+                        readOnly
+                        disabled
+                        className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-xs sm:text-sm text-slate-700 bg-slate-50 font-bold cursor-not-allowed select-none"
                       />
                     </div>
 

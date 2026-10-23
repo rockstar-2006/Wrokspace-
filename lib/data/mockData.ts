@@ -22,7 +22,7 @@ export const createEmptyStudentProfile = (
   phoneNumber: "",
   countryCode: "+91",
   dateOfBirth: "",
-  college: "",
+  college: "Shri Madhwa Vadiraja Institute of Technology & Management",
   usn: "",
   department: "",
   year: "",
@@ -281,12 +281,6 @@ export const FEATURED_PROJECTS: Project[] = [
 
 export const COLLEGE_OPTIONS = [
   "Shri Madhwa Vadiraja Institute of Technology & Management",
-  "Manipal Institute of Technology (MIT)",
-  "National Institute of Technology Karnataka (NITK)",
-  "RV College of Engineering",
-  "BMS College of Engineering",
-  "PES University",
-  "Other Institution",
 ];
 
 export const DEPARTMENT_OPTIONS = [

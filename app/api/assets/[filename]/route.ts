@@ -9,7 +9,24 @@ export async function GET(
   try {
     const filename = params.filename;
     
-    // Directory where generated artifacts reside
+    // 1. First check the app's public/assets directory (works in both local and Vercel production)
+    const publicFilePath = path.join(process.cwd(), "public", "assets", filename);
+    if (fs.existsSync(publicFilePath)) {
+      const fileBuffer = fs.readFileSync(publicFilePath);
+      const ext = path.extname(filename).toLowerCase();
+      let contentType = "image/jpeg";
+      if (ext === ".png") contentType = "image/png";
+      if (ext === ".svg") contentType = "image/svg+xml";
+
+      return new NextResponse(fileBuffer, {
+        headers: {
+          "Content-Type": contentType,
+          "Cache-Control": "public, max-age=31536000, immutable",
+        },
+      });
+    }
+
+    // 2. Fallback for local machine artifacts directory
     const brainDir = "C:\\Users\\User\\.gemini\\antigravity\\brain\\63de0ce7-0158-4f4a-9749-bfcf6031eae6";
     const filePath = path.join(brainDir, filename);
 

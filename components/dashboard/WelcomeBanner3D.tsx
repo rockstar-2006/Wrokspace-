@@ -217,7 +217,7 @@ export default function WelcomeBanner3D({
             >
               {/* The clean 3D isometric artwork seamlessly blended */}
               <Image
-                src="/api/assets/dashboard_banner_illustration_clean_1791651742440.jpg"
+                src="/assets/dashboard_banner_illustration_clean_1791651742440.jpg"
                 alt="Discover Amazing Student Projects"
                 width={560}
                 height={340}

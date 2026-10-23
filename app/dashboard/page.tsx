@@ -71,8 +71,8 @@ export default function StudentDashboardPage() {
         const globalRaw = localStorage.getItem("projecthub_user_projects");
         const globalProjects: Project[] = globalRaw ? JSON.parse(globalRaw) : [];
 
-        // Fetch published projects from Firestore database
-        const dbProjects = await FirestoreService.getPublishedProjects();
+        // Fetch published projects + user's submitted projects from Firestore database
+        const dbProjects = await FirestoreService.getAllDashboardProjects(user?.uid);
 
         // Merge with deduplication by ID (prioritizing user submissions)
         const map = new Map<string, Project>();

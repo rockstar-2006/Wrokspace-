@@ -305,6 +305,42 @@ export class FirestoreService {
   }
 
   /**
+   * Fetch all visible projects for dashboard:
+   * - All "Published" projects
+   * - Plus any projects owned by the currently logged-in user (even if Pending review / Under Review / Draft)
+   */
+  static async getAllDashboardProjects(uid?: string): Promise<Project[]> {
+    const list: Project[] = [];
+    const map = new Map<string, Project>();
+
+    try {
+      const projectsRef = collection(db, "projects");
+
+      // 1. Fetch published projects
+      const publishedQuery = query(projectsRef, where("status", "==", "Published"));
+      const publishedSnap = await getDocs(publishedQuery);
+      publishedSnap.forEach((doc) => {
+        const data = doc.data() as Project;
+        map.set(data.id || doc.id, { ...data, id: data.id || doc.id });
+      });
+
+      // 2. Fetch projects owned by the active user (Pending review, Under review, Draft)
+      if (uid) {
+        const userProjectsQuery = query(projectsRef, where("ownerId", "==", uid));
+        const userSnap = await getDocs(userProjectsQuery);
+        userSnap.forEach((doc) => {
+          const data = doc.data() as Project;
+          map.set(data.id || doc.id, { ...data, id: data.id || doc.id });
+        });
+      }
+    } catch (err) {
+      console.warn("Failed to fetch dashboard projects from Firestore:", err);
+    }
+
+    return Array.from(map.values());
+  }
+
+  /**
    * Fetch all published projects from Firestore
    */
   static async getPublishedProjects(): Promise<Project[]> {
