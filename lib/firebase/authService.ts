@@ -222,6 +222,15 @@ export class AuthService {
   }
 
   /**
+   * Asynchronous student lookup across local storage and live Firestore database
+   */
+  static async findStudentAsync(code: string): Promise<StudentProfile | null> {
+    const local = this.findStudentByCode(code);
+    if (local) return local;
+    return FirestoreService.findStudent(code);
+  }
+
+  /**
    * Get currently persisted user from local storage
    */
   static getStoredUser(): AuthUser | null {

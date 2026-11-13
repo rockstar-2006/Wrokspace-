@@ -69,6 +69,132 @@ export class FirestoreService {
   }
 
   /**
+   * Search registered student profile across Firestore 'users' collection and local caches
+   * Searches by:
+   * 1. studentCode (exact e.g. "PH-2026-WLRF", without hyphens "PH2026WLRF", or suffix "WLRF")
+   * 2. USN (case-insensitive, e.g. "4MW21CS001")
+   * 3. Email (e.g. "student@gmail.com")
+   */
+  static async findStudent(
+    codeOrIdentifier: string
+  ): Promise<StudentProfile | null> {
+    if (!codeOrIdentifier) return null;
+    const clean = codeOrIdentifier.trim();
+    if (!clean) return null;
+
+    const upper = clean.toUpperCase();
+    const lower = clean.toLowerCase();
+    const normalizedAlphanumeric = upper.replace(/[^A-Z0-9]/g, "");
+
+    // 1. Check local storage first (instant if on same device or previously cached)
+    if (typeof window !== "undefined") {
+      try {
+        const rawRegistry = localStorage.getItem("projecthub_accounts_registry");
+        if (rawRegistry) {
+          const registry = JSON.parse(rawRegistry);
+          for (const key of Object.keys(registry)) {
+            const p = registry[key]?.profile as StudentProfile;
+            if (p) {
+              const sCode = (p.studentCode || "").toUpperCase();
+              const sNorm = sCode.replace(/[^A-Z0-9]/g, "");
+              const uNorm = (p.usn || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+              if (
+                sCode === upper ||
+                sNorm === normalizedAlphanumeric ||
+                (normalizedAlphanumeric.length >= 4 && sNorm.endsWith(normalizedAlphanumeric)) ||
+                (uNorm && uNorm === normalizedAlphanumeric) ||
+                (p.email && p.email.toLowerCase() === lower)
+              ) {
+                return p;
+              }
+            }
+          }
+        }
+
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith("projecthub_profile_")) {
+            const raw = localStorage.getItem(k);
+            if (raw) {
+              const p: StudentProfile = JSON.parse(raw);
+              if (p) {
+                const sCode = (p.studentCode || "").toUpperCase();
+                const sNorm = sCode.replace(/[^A-Z0-9]/g, "");
+                const uNorm = (p.usn || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+                if (
+                  sCode === upper ||
+                  sNorm === normalizedAlphanumeric ||
+                  (normalizedAlphanumeric.length >= 4 && sNorm.endsWith(normalizedAlphanumeric)) ||
+                  (uNorm && uNorm === normalizedAlphanumeric) ||
+                  (p.email && p.email.toLowerCase() === lower)
+                ) {
+                  return p;
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("LocalStorage student lookup check failed:", e);
+      }
+    }
+
+    // 2. Query Firestore 'users' collection across all students
+    try {
+      const usersRef = collection(db, "users");
+
+      // Query by exact studentCode
+      const qCode = query(usersRef, where("studentCode", "==", upper));
+      const snapCode = await getDocs(qCode);
+      if (!snapCode.empty) {
+        return snapCode.docs[0].data() as StudentProfile;
+      }
+
+      // Query by USN
+      const qUsn = query(usersRef, where("usn", "==", upper));
+      const snapUsn = await getDocs(qUsn);
+      if (!snapUsn.empty) {
+        return snapUsn.docs[0].data() as StudentProfile;
+      }
+
+      // Query by Email
+      if (clean.includes("@")) {
+        const qEmail = query(usersRef, where("email", "==", lower));
+        const snapEmail = await getDocs(qEmail);
+        if (!snapEmail.empty) {
+          return snapEmail.docs[0].data() as StudentProfile;
+        }
+      }
+
+      // Broad scan to support normalized code (e.g. without hyphens), suffix matches, or lowercase USNs
+      const allUsersSnap = await getDocs(usersRef);
+      for (const d of allUsersSnap.docs) {
+        const data = d.data() as StudentProfile;
+        if (!data) continue;
+
+        const stuCode = (data.studentCode || "").toUpperCase();
+        const stuNorm = stuCode.replace(/[^A-Z0-9]/g, "");
+        const usnNorm = (data.usn || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+        const emailLower = (data.email || "").toLowerCase();
+
+        if (
+          stuCode === upper ||
+          (stuNorm && stuNorm === normalizedAlphanumeric) ||
+          (normalizedAlphanumeric.length >= 4 && (stuNorm.endsWith(normalizedAlphanumeric) || stuNorm.includes(normalizedAlphanumeric))) ||
+          (usnNorm && usnNorm === normalizedAlphanumeric) ||
+          (emailLower && emailLower === lower)
+        ) {
+          return data;
+        }
+      }
+    } catch (err) {
+      console.warn("Firestore findStudent failed:", err);
+    }
+
+    return null;
+  }
+
+  /**
    * Save or update complete user profile in Firestore.
    */
   static async saveUserProfile(profile: StudentProfile): Promise<boolean> {
