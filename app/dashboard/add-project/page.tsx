@@ -302,7 +302,9 @@ export default function AddNewProjectPage() {
             if (proj.solution) setProposedSolution(proj.solution);
             if (proj.outcomes) setProjectOutcomes(proj.outcomes);
             if (proj.challenges) setChallengesFaced(proj.challenges);
-            if (proj.futureEnhancements) setFutureEnhancements(proj.futureEnhancements);
+            if (proj.futureEnhancements || proj.futureScope) {
+              setFutureEnhancements(proj.futureEnhancements || proj.futureScope || "");
+            }
 
             // Tech Stack (clean split of legacy comma-separated values & deduplicate)
             if (proj.tags && Array.isArray(proj.tags)) {
@@ -734,6 +736,7 @@ export default function AddNewProjectPage() {
         objectives: briefDescription.trim(),
         outcomes: projectOutcomes.trim(),
         challenges: challengesFaced.trim(),
+        futureScope: futureEnhancements.trim(),
         futureEnhancements: futureEnhancements.trim(),
         academicYear: year || existingProject?.academicYear || "2025-2026",
         batch: projectDuration || existingProject?.batch || "Aug 2025 - Dec 2025",

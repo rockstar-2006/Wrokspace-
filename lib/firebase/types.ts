@@ -100,6 +100,7 @@ export interface Project {
   methodology?: string;
   challenges?: string;
   futureScope?: string;
+  futureEnhancements?: string;
   videoUrl?: string;
   presentationPdfUrl?: string;
   architectureUrl?: string;
