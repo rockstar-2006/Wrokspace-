@@ -223,8 +223,14 @@ export default function AddNewProjectPage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [submissionSuccess, setSubmissionSuccess] = useState<ProjectStatus | null>(null);
 
-  // Auto-init logged-in student as Team Leader on mount
+  // ════════ Edit Mode State ════════
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [existingProject, setExistingProject] = useState<Project | null>(null);
+  const [isLoadingProjectData, setIsLoadingProjectData] = useState(false);
+
+  // Auto-init logged-in student as Team Leader on mount (only for new projects)
   useEffect(() => {
+    if (editingProjectId) return;
     if (profile.fullName && teamMembers.length === 0) {
       setTeamMembers([
         {
@@ -247,11 +253,109 @@ export default function AddNewProjectPage() {
     if (profile.usn) setUsn(profile.usn);
     if (profile.year) setYear(profile.year);
     if (profile.branch) setBranch(profile.branch);
-  }, [profile]);
+  }, [profile, editingProjectId]);
 
-  // Load in-progress draft from storage on mount so refreshing NEVER wipes entered data
+  // Load project for edit or draft from storage on mount
   useEffect(() => {
     if (typeof window === "undefined") return;
+
+    const params = new URLSearchParams(window.location.search);
+    const editId = params.get("edit") || params.get("id");
+
+    if (editId) {
+      setEditingProjectId(editId);
+      setIsLoadingProjectData(true);
+
+      const loadExistingProject = async () => {
+        try {
+          const proj = await FirestoreService.getProjectById(editId, user?.uid || profile?.uid);
+          if (proj) {
+            setExistingProject(proj);
+            if (proj.title) setTitle(proj.title);
+
+            // Project Type mapping
+            if (proj.projectType) {
+              const matchedType = PROJECT_TYPES.find((pt) => pt.id === proj.projectType);
+              if (matchedType) {
+                setProjectType(proj.projectType);
+              } else {
+                setProjectType("Others");
+                setCustomProjectType(proj.projectType);
+              }
+            }
+
+            // Domain mapping
+            if (proj.subtitle) {
+              if (DOMAIN_OPTIONS.includes(proj.subtitle)) {
+                setDomain(proj.subtitle);
+              } else {
+                setDomain("Others");
+                setCustomDomain(proj.subtitle);
+              }
+            }
+
+            if (proj.description) setDetailedDescription(proj.description);
+            if (proj.objectives || proj.description) {
+              setBriefDescription(proj.objectives || proj.description);
+            }
+            if (proj.problemStatement) setProblemStatement(proj.problemStatement);
+            if (proj.solution) setProposedSolution(proj.solution);
+            if (proj.outcomes) setProjectOutcomes(proj.outcomes);
+            if (proj.challenges) setChallengesFaced(proj.challenges);
+            if (proj.futureEnhancements) setFutureEnhancements(proj.futureEnhancements);
+
+            // Tech Stack (clean split of legacy comma-separated values & deduplicate)
+            if (proj.tags && Array.isArray(proj.tags)) {
+              const cleanedTags = proj.tags
+                .flatMap((t: string) => (typeof t === "string" ? t.split(/[,;\n]+/) : []))
+                .map((t: string) => t.trim())
+                .filter(Boolean);
+              const unique = Array.from(new Set(cleanedTags));
+              if (unique.length > 0) {
+                setSelectedTechs(unique);
+              }
+            }
+
+            if (proj.features && Array.isArray(proj.features) && proj.features.length > 0) {
+              setFeatures(proj.features);
+            }
+
+            if (proj.image) setCoverImage(proj.image);
+            if (proj.galleryImages && Array.isArray(proj.galleryImages)) {
+              setScreenshots(proj.galleryImages);
+            }
+
+            if (proj.githubUrl) setGithubUrl(proj.githubUrl);
+            if (proj.liveUrl) setLiveUrl(proj.liveUrl);
+            if (proj.videoUrl) setDemoVideoUrl(proj.videoUrl);
+            if (proj.apkDownloadUrl) setApkDownloadUrl(proj.apkDownloadUrl);
+            if (proj.presentationPdfUrl) setPresentationPdfUrl(proj.presentationPdfUrl);
+
+            if (proj.teamName) setTeamName(proj.teamName);
+            if (proj.teamMembers && Array.isArray(proj.teamMembers) && proj.teamMembers.length > 0) {
+              setTeamMembers(proj.teamMembers);
+            }
+            if (proj.facultyGuide) setFacultyGuide(proj.facultyGuide);
+            if (proj.facultyDepartment) setFacultyDepartment(proj.facultyDepartment);
+
+            if (proj.academicYear) setYear(proj.academicYear);
+            if (proj.batch) setProjectDuration(proj.batch);
+            if (proj.author?.college) setCollege(proj.author.college);
+
+            setPolicyAccepted(true);
+          }
+        } catch (err) {
+          console.error("Failed to load project details for editing:", err);
+        } finally {
+          setIsLoadingProjectData(false);
+        }
+      };
+
+      loadExistingProject();
+      return;
+    }
+
+    // Normal draft loading for brand new projects
     try {
       const draftKey = user?.uid
         ? `projecthub_add_project_draft_${user.uid}`
@@ -267,18 +371,18 @@ export default function AddNewProjectPage() {
         if (d.briefDescription) setBriefDescription(d.briefDescription);
         if (d.problemStatement) setProblemStatement(d.problemStatement);
         if (d.proposedSolution) setProposedSolution(d.proposedSolution);
-        if (d.selectedTechs) setSelectedTechs(d.selectedTechs);
-        if (d.features) setFeatures(d.features);
+        if (d.selectedTechs && Array.isArray(d.selectedTechs)) setSelectedTechs(d.selectedTechs);
+        if (d.features && Array.isArray(d.features)) setFeatures(d.features);
         if (d.githubUrl) setGithubUrl(d.githubUrl);
         if (d.liveUrl) setLiveUrl(d.liveUrl);
         if (d.coverImage) setCoverImage(d.coverImage);
       }
     } catch {}
-  }, [user?.uid]);
+  }, [user?.uid, profile?.uid]);
 
-  // Auto-save draft on every edit
+  // Auto-save draft on every edit (ONLY when creating new project, never in edit mode)
   useEffect(() => {
-    if (typeof window === "undefined" || !title) return;
+    if (typeof window === "undefined" || !title || editingProjectId) return;
     try {
       const draftKey = user?.uid
         ? `projecthub_add_project_draft_${user.uid}`
@@ -317,6 +421,7 @@ export default function AddNewProjectPage() {
     liveUrl,
     coverImage,
     user?.uid,
+    editingProjectId,
   ]);
 
   // GSAP animated step completion and card transition
@@ -416,22 +521,44 @@ export default function AddNewProjectPage() {
 
   // Toggle Tech chip
   const toggleTech = (tech: string) => {
-    if (selectedTechs.includes(tech)) {
-      setSelectedTechs(selectedTechs.filter((t) => t !== tech));
+    const exists = selectedTechs.some((t) => t.toLowerCase() === tech.toLowerCase());
+    if (exists) {
+      setSelectedTechs(selectedTechs.filter((t) => t.toLowerCase() !== tech.toLowerCase()));
     } else {
       setSelectedTechs([...selectedTechs, tech]);
     }
   };
 
-  // Add Custom Tech
-  const handleAddCustomTech = (e: React.KeyboardEvent | React.MouseEvent) => {
-    if ("key" in e && e.key !== "Enter") return;
-    e.preventDefault();
-    const trimmed = customTechInput.trim();
-    if (trimmed && !selectedTechs.includes(trimmed)) {
-      setSelectedTechs([...selectedTechs, trimmed]);
-      setCustomTechInput("");
+  // Remove specific Tech chip
+  const removeTech = (techToRemove: string) => {
+    setSelectedTechs(selectedTechs.filter((t) => t.toLowerCase() !== techToRemove.toLowerCase()));
+  };
+
+  // Add Custom Tech with multi-delimiter splitting (comma, semicolon, newline) and deduplication
+  const handleAddCustomTech = (e?: React.KeyboardEvent | React.MouseEvent) => {
+    if (e && "key" in e && e.key !== "Enter") return;
+    if (e) e.preventDefault();
+    if (!customTechInput.trim()) return;
+
+    const parts = customTechInput
+      .split(/[,;\n]+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+
+    const existingLower = new Set(selectedTechs.map((t) => t.toLowerCase()));
+    const toAdd: string[] = [];
+
+    parts.forEach((part) => {
+      if (!existingLower.has(part.toLowerCase())) {
+        existingLower.add(part.toLowerCase());
+        toAdd.push(part);
+      }
+    });
+
+    if (toAdd.length > 0) {
+      setSelectedTechs([...selectedTechs, ...toAdd]);
     }
+    setCustomTechInput("");
   };
 
   // Student Profile Code Lookup
@@ -534,7 +661,7 @@ export default function AddNewProjectPage() {
     return true;
   };
 
-  // Submit Handler
+  // Submit Handler (Works for both New Submission and Edit/Update Mode)
   const handleSaveProject = async (status: ProjectStatus = "Pending review") => {
     if (status === "Pending review" && !policyAccepted) {
       setErrorMessage("Please accept the publishing and content authorization policy before submitting.");
@@ -545,8 +672,8 @@ export default function AddNewProjectPage() {
     setErrorMessage(null);
 
     try {
-      const projectId = `proj-${Date.now().toString(36)}`;
-      const slug = title
+      const projectId = editingProjectId || existingProject?.id || `proj-${Date.now().toString(36)}`;
+      const slug = existingProject?.slug || title
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/^-|-$/g, "");
@@ -578,80 +705,88 @@ export default function AddNewProjectPage() {
       else if (effectiveProjectType.toLowerCase().includes("ai") || effectiveProjectType.toLowerCase().includes("ml")) categoryMapped = "AI / ML";
       else if (effectiveProjectType.toLowerCase().includes("hardware")) categoryMapped = "Hardware";
 
-      const newProject: Project = {
+      // If in edit mode and status is not explicitly changing, preserve existing status
+      const resolvedStatus = status;
+
+      const projectPayload: Project = {
         id: projectId,
         title: title.trim(),
         subtitle: effectiveDomain || effectiveProjectType,
         description: detailedDescription.trim() || briefDescription.trim(),
         category: categoryMapped,
         projectType: effectiveProjectType,
-        status,
-        image: coverImage || "/assets/add-project/hero-isometric.jpg",
+        status: resolvedStatus,
+        image: coverImage || existingProject?.image || "/assets/add-project/hero-isometric.jpg",
         tags: selectedTechs.length > 0 ? selectedTechs : ["Tech"],
         teamSize: Math.max(teamMembers.length, 1),
-        ownerId: user?.uid || profile.uid || "anonymous",
-        ownerCode: profile.studentCode || "",
+        ownerId: user?.uid || profile.uid || existingProject?.ownerId || "anonymous",
+        ownerCode: profile.studentCode || existingProject?.ownerCode || "",
         author: {
-          name: profile.fullName || "Student Creator",
-          avatar: profile.photoURL || "",
+          name: profile.fullName || existingProject?.author?.name || "Student Creator",
+          avatar: profile.photoURL || existingProject?.author?.avatar || "",
           role: "Lead Creator",
-          college: college || profile.college || "Engineering College",
-          studentCode: profile.studentCode,
+          college: college || profile.college || existingProject?.author?.college || "Shri Madhwa Vadiraja Institute of Technology & Management",
+          studentCode: profile.studentCode || existingProject?.author?.studentCode,
         },
         problemStatement: problemStatement.trim(),
         solution: proposedSolution.trim(),
         features,
         objectives: briefDescription.trim(),
         outcomes: projectOutcomes.trim(),
-        academicYear: year || "2025-2026",
-        batch: projectDuration,
+        challenges: challengesFaced.trim(),
+        futureEnhancements: futureEnhancements.trim(),
+        academicYear: year || existingProject?.academicYear || "2025-2026",
+        batch: projectDuration || existingProject?.batch || "Aug 2025 - Dec 2025",
         githubUrl: githubUrl.trim(),
         liveUrl: liveUrl.trim(),
         apkDownloadUrl: apkDownloadUrl.trim(),
         videoUrl: demoVideoUrl.trim(),
         presentationPdfUrl: presentationPdfUrl.trim(),
-        galleryImages: screenshots,
-        teamName: teamName.trim() || `${title.split(" ")[0]} Team`,
+        galleryImages: screenshots.length > 0 ? screenshots : (existingProject?.galleryImages || []),
+        teamName: teamName.trim() || existingProject?.teamName || `${title.split(" ")[0]} Team`,
         teamMembers,
         facultyGuide: facultyGuide.trim(),
         facultyDepartment: effectiveDepartment,
-        stars: 0,
-        views: 1,
+        stars: existingProject?.stars || 0,
+        views: existingProject?.views || 1,
         slug,
-        createdAt: new Date().toISOString(),
+        createdAt: existingProject?.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
 
-      // 1. Save to isolated user projects key
+      // 1. Save to isolated user projects key (filter out previous version to avoid duplicates)
       const userProjectsKey = user?.uid
         ? `projecthub_projects_${user.uid}`
         : "projecthub_user_projects";
 
       const currentIsolated = localStorage.getItem(userProjectsKey);
-      const isolatedList: Project[] = currentIsolated ? JSON.parse(currentIsolated) : [];
-      isolatedList.unshift(newProject);
+      let isolatedList: Project[] = currentIsolated ? JSON.parse(currentIsolated) : [];
+      isolatedList = isolatedList.filter((p) => p.id !== projectId);
+      isolatedList.unshift(projectPayload);
       localStorage.setItem(userProjectsKey, JSON.stringify(isolatedList));
 
       // 2. Save to global registry
       const currentGlobal = localStorage.getItem("projecthub_user_projects");
-      const globalList: Project[] = currentGlobal ? JSON.parse(currentGlobal) : [];
-      const filtered = globalList.filter((p) => p.id !== newProject.id);
-      filtered.unshift(newProject);
-      localStorage.setItem("projecthub_user_projects", JSON.stringify(filtered));
+      let globalList: Project[] = currentGlobal ? JSON.parse(currentGlobal) : [];
+      globalList = globalList.filter((p) => p.id !== projectId);
+      globalList.unshift(projectPayload);
+      localStorage.setItem("projecthub_user_projects", JSON.stringify(globalList));
 
-      // 3. Clear draft
-      const draftKey = user?.uid
-        ? `projecthub_add_project_draft_${user.uid}`
-        : "projecthub_add_project_draft";
-      localStorage.removeItem(draftKey);
+      // 3. Clear draft ONLY if it was a new project submission
+      if (!editingProjectId) {
+        const draftKey = user?.uid
+          ? `projecthub_add_project_draft_${user.uid}`
+          : "projecthub_add_project_draft";
+        localStorage.removeItem(draftKey);
+      }
 
       // 4. Persist to Firestore database
-      await FirestoreService.saveProject(newProject);
+      await FirestoreService.saveProject(projectPayload);
 
       setSubmissionSuccess(status);
       setTimeout(() => {
-        router.push("/dashboard");
-      }, 1500);
+        router.push("/dashboard/my-projects");
+      }, 1200);
     } catch (err: any) {
       setErrorMessage(err?.message || "Failed to save project. Please check connection and try again.");
     } finally {
@@ -743,31 +878,44 @@ export default function AddNewProjectPage() {
 
         <PageTransitionWrapper>
           <main className="max-w-[1360px] mx-auto px-4 sm:px-8 w-full flex-1 pt-6 relative z-10">
-            {/* Back Link */}
-            <Link
-              href="/dashboard/my-projects"
-              className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-slate-900 transition-colors mb-3"
-            >
-              <ArrowLeft className="w-3.5 h-3.5" />
-              <span>Back to My Projects</span>
-            </Link>
+            {/* Back Link & Edit Status Banner */}
+            <div className="flex items-center justify-between mb-3">
+              <Link
+                href="/dashboard/my-projects"
+                className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-slate-900 transition-colors"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span>Back to My Projects</span>
+              </Link>
+
+              {editingProjectId && (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-50 border border-amber-200 text-amber-800 text-[11px] font-bold shadow-2xs">
+                  <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping" />
+                  Editing Mode: {existingProject?.status || "Draft"}
+                </span>
+              )}
+            </div>
 
             {/* ── Page Hero Header (With 3D Isometric Illustration) ── */}
             <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6 mb-6">
               <div>
                 <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-50 border border-indigo-200/70 text-indigo-700 text-[10px] font-bold tracking-tight mb-2 shadow-2xs">
                   <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
-                  <ScrambleText triggerOn="mount">STUDENT SUBMISSION WIZARD</ScrambleText>
+                  <ScrambleText triggerOn="mount">
+                    {editingProjectId ? "PROJECT UPDATE SUITE" : "STUDENT SUBMISSION WIZARD"}
+                  </ScrambleText>
                 </div>
 
                 <SplitTextHeading
                   as="h1"
                   className="text-2xl sm:text-3xl font-black tracking-tight text-[#0F172A]"
                 >
-                  Add New Project
+                  {editingProjectId ? "Edit Project" : "Add New Project"}
                 </SplitTextHeading>
                 <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
-                  Share your creativity, build your portfolio and inspire others.
+                  {editingProjectId
+                    ? "Modify your project overview, manage technologies, and update assets."
+                    : "Share your creativity, build your portfolio and inspire others."}
                 </p>
               </div>
 
@@ -775,7 +923,7 @@ export default function AddNewProjectPage() {
               <div className="relative flex items-center gap-3 shrink-0">
                 <div className="text-right hidden sm:block">
                   <span className="font-serif italic text-xs font-bold text-indigo-600 block transform -rotate-3">
-                    Your ideas matter!
+                    {editingProjectId ? "Keep it updated!" : "Your ideas matter!"}
                   </span>
                   <span className="text-indigo-400 text-sm">⤵</span>
                 </div>
@@ -802,15 +950,18 @@ export default function AddNewProjectPage() {
                   words={[
                     "Add detailed problem statements to rank higher in departmental evaluation.",
                     "Include live demo links or GitHub repos to enable instant peer testing.",
-                    "Compress media previews to ensure lightning-fast dashboard previews.",
+                    "Highlight all your core libraries and frameworks in the tech stack.",
                     "Tag core tech competencies for recruiter portfolio discovery.",
                   ]}
                   className="text-indigo-600 font-bold"
                 />
               </div>
-              <span className="text-[11px] font-mono text-slate-400">
-                Step {currentStep} of 5
-              </span>
+              <div className="flex items-center gap-2 text-[11px] font-mono text-slate-400">
+                {editingProjectId && (
+                  <span className="text-indigo-600 font-bold">(Click any step to jump)</span>
+                )}
+                <span>Step {currentStep} of 5</span>
+              </div>
             </div>
 
             {/* ── 5-Step Stepper Bar with Animated Progress Line ── */}
@@ -831,7 +982,7 @@ export default function AddNewProjectPage() {
                       key={item.step}
                       type="button"
                       onClick={() => {
-                        if (item.step < currentStep) goToStep(item.step as any);
+                        if (editingProjectId || item.step < currentStep) goToStep(item.step as any);
                       }}
                       className="flex flex-col items-center gap-1.5 group cursor-pointer focus:outline-none"
                     >
@@ -917,9 +1068,19 @@ export default function AddNewProjectPage() {
           <div className="lg:col-span-8">
             <div
               ref={formCardRef}
-              className="bg-white rounded-3xl border border-slate-100 shadow-xs p-6 sm:p-8"
+              className="bg-white rounded-3xl border border-slate-100 shadow-xs p-6 sm:p-8 relative min-h-[420px]"
             >
-              {/* ════════════ STEP 1: BASIC DETAILS ════════════ */}
+              {isLoadingProjectData ? (
+                <div className="py-24 flex flex-col items-center justify-center gap-3 text-center">
+                  <div className="w-10 h-10 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin" />
+                  <p className="text-sm font-bold text-slate-800">Loading project details...</p>
+                  <p className="text-xs text-slate-500 font-medium">
+                    Fetching project specifications and tech stack...
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {/* ════════════ STEP 1: BASIC DETAILS ════════════ */}
               {currentStep === 1 && (
                 <div className="space-y-6">
                   {/* Header */}
@@ -1325,49 +1486,130 @@ export default function AddNewProjectPage() {
                     />
                   </div>
 
-                  {/* Technologies Used (Searchable Palette + Multi-Select) */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-2">
-                      Technologies Used <span className="text-rose-500">*</span>
-                    </label>
-                    <div className="flex flex-wrap gap-1.5 mb-3">
-                      {POPULAR_TECHS.map((tech) => {
-                        const isSelected = selectedTechs.includes(tech);
-                        return (
-                          <button
-                            key={tech}
-                            type="button"
-                            onClick={() => toggleTech(tech)}
-                            className={`px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${
-                              isSelected
-                                ? "bg-indigo-600 text-white shadow-2xs"
-                                : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                            }`}
-                          >
-                            {isSelected ? <Check className="w-3 h-3" /> : <Plus className="w-3 h-3 text-slate-400" />}
-                            <span>{tech}</span>
-                          </button>
-                        );
-                      })}
+                  {/* Technologies Used (Searchable Palette + Multi-Select + Highlighted Badge Panel) */}
+                  <div className="space-y-3.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                        <Code2 className="w-4 h-4 text-indigo-600" />
+                        <span>Technologies & Tools Used</span>
+                        <span className="text-rose-500">*</span>
+                      </label>
+                      {selectedTechs.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedTechs([])}
+                          className="text-[11px] font-semibold text-rose-600 hover:text-rose-700 hover:underline cursor-pointer"
+                        >
+                          Clear all
+                        </button>
+                      )}
                     </div>
 
-                    {/* Custom Tech Input */}
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={customTechInput}
-                        onChange={(e) => setCustomTechInput(e.target.value)}
-                        onKeyDown={handleAddCustomTech}
-                        placeholder="Type other technology (e.g. Supabase, Tailwind, Keras) and press Enter"
-                        className="flex-1 px-3.5 py-2 rounded-xl border border-slate-200 text-xs text-slate-800 focus:outline-none focus:border-indigo-500"
-                      />
-                      <button
-                        type="button"
-                        onClick={handleAddCustomTech}
-                        className="px-3.5 py-2 rounded-xl bg-slate-800 text-white text-xs font-bold hover:bg-black transition-colors"
-                      >
-                        Add
-                      </button>
+                    {/* Active Tech Stack Highlight Panel */}
+                    <div className="p-4 rounded-2xl bg-gradient-to-br from-indigo-50/80 via-purple-50/50 to-blue-50/70 border-2 border-indigo-200/90 shadow-2xs">
+                      <div className="flex items-center justify-between mb-2.5">
+                        <span className="text-xs font-black text-indigo-950 flex items-center gap-1.5">
+                          <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                          <span>Active Tech Stack</span>
+                          <span className="ml-1 px-2 py-0.5 rounded-full bg-indigo-600 text-white text-[10px] font-bold">
+                            {selectedTechs.length}
+                          </span>
+                        </span>
+                        <span className="text-[10px] text-slate-500 font-medium">
+                          Click (×) to remove any technology
+                        </span>
+                      </div>
+
+                      {selectedTechs.length > 0 ? (
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          {selectedTechs.map((tech) => (
+                            <span
+                              key={tech}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-indigo-200 text-indigo-900 text-xs font-bold shadow-2xs hover:border-indigo-400 hover:shadow-xs transition-all"
+                            >
+                              <span className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
+                              <span>{tech}</span>
+                              <button
+                                type="button"
+                                onClick={() => removeTech(tech)}
+                                className="p-0.5 rounded-md hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors ml-0.5 cursor-pointer"
+                                title={`Remove ${tech}`}
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="py-4 text-center border border-dashed border-indigo-200 rounded-xl bg-white/70">
+                          <p className="text-xs text-slate-500 font-medium">
+                            No technologies added yet. Pick from popular suggestions below or type custom tech tags.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Popular Tech Suggestions Palette */}
+                    <div>
+                      <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block mb-2">
+                        Quick Add Popular Technologies:
+                      </span>
+                      <div className="flex flex-wrap gap-1.5 mb-3">
+                        {POPULAR_TECHS.map((tech) => {
+                          const isSelected = selectedTechs.some(
+                            (t) => t.toLowerCase() === tech.toLowerCase()
+                          );
+                          return (
+                            <button
+                              key={tech}
+                              type="button"
+                              onClick={() => toggleTech(tech)}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                                isSelected
+                                  ? "bg-indigo-600 text-white shadow-2xs ring-2 ring-indigo-200"
+                                  : "bg-slate-100 text-slate-700 hover:bg-slate-200 hover:text-slate-900 border border-slate-200/60"
+                              }`}
+                            >
+                              {isSelected ? (
+                                <Check className="w-3.5 h-3.5 text-white" />
+                              ) : (
+                                <Plus className="w-3.5 h-3.5 text-slate-400" />
+                              )}
+                              <span>{tech}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Custom Tech Input with Comma Splitting */}
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={customTechInput}
+                          onChange={(e) => setCustomTechInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              handleAddCustomTech();
+                            }
+                          }}
+                          placeholder="Type tech stack (e.g. Pandas, NumPy, Chart.js, Express) and press Add or Enter"
+                          className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleAddCustomTech()}
+                          className="px-4 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition-colors shadow-2xs shrink-0 cursor-pointer flex items-center gap-1.5"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Add Tech</span>
+                        </button>
+                      </div>
+                      <p className="text-[11px] text-slate-400 font-medium mt-1.5">
+                        💡 Tip: You can type multiple technologies separated by commas (e.g. <span className="font-mono text-indigo-600">pandas, numpy, chart.js</span>) and click Add.
+                      </p>
                     </div>
                   </div>
 
@@ -1870,22 +2112,34 @@ export default function AddNewProjectPage() {
                         type="button"
                         disabled={isSubmitting}
                         onClick={() => handleSaveProject("Draft")}
-                        className="flex-1 sm:flex-initial px-5 py-2.5 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-bold"
+                        className="flex-1 sm:flex-initial px-5 py-2.5 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-bold transition-colors cursor-pointer"
                       >
-                        Save as Draft
+                        {editingProjectId ? "Save Changes as Draft" : "Save as Draft"}
                       </button>
 
                       <button
                         type="button"
                         disabled={isSubmitting}
-                        onClick={() => handleSaveProject("Pending review")}
-                        className="flex-1 sm:flex-initial px-7 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-bold shadow-lg shadow-indigo-500/25 flex items-center justify-center gap-2 transition-all transform hover:scale-[1.01]"
+                        onClick={() =>
+                          handleSaveProject(
+                            existingProject?.status === "Published"
+                              ? "Published"
+                              : "Pending review"
+                          )
+                        }
+                        className="flex-1 sm:flex-initial px-7 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-bold shadow-lg shadow-indigo-500/25 flex items-center justify-center gap-2 transition-all transform hover:scale-[1.01] cursor-pointer"
                       >
                         {isSubmitting ? (
-                          <span>Submitting to Firestore...</span>
+                          <span>Saving to Firestore...</span>
                         ) : (
                           <>
-                            <span>Submit for Approval</span>
+                            <span>
+                              {editingProjectId
+                                ? existingProject?.status === "Published"
+                                  ? "Update Published Project"
+                                  : "Update & Submit for Review"
+                                : "Submit for Approval"}
+                            </span>
                             <ArrowRight className="w-4 h-4" />
                           </>
                         )}
@@ -1893,6 +2147,8 @@ export default function AddNewProjectPage() {
                     </div>
                   </div>
                 </div>
+              )}
+                </>
               )}
             </div>
           </div>

@@ -31,6 +31,7 @@ export default function WelcomeBanner3D({
   const pillsRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLDivElement>(null);
   const rotatingWordRef = useRef<HTMLSpanElement>(null);
+  const [imageError, setImageError] = React.useState(false);
   const words = ["Amazing", "Innovative", "Visionary", "Creative", "Inspiring"];
   const wordIndexRef = useRef(0);
 
@@ -215,15 +216,40 @@ export default function WelcomeBanner3D({
               ref={imageRef}
               className="relative w-full h-full flex items-center justify-center lg:justify-end will-change-transform"
             >
-              {/* The clean 3D isometric artwork seamlessly blended */}
-              <Image
-                src="/assets/dashboard_banner_illustration_clean_1791651742440.jpg"
-                alt="Discover Amazing Student Projects"
-                width={560}
-                height={340}
-                priority
-                className="object-contain max-h-[270px] scale-105 mix-blend-multiply hover:scale-110 transition-transform duration-500"
-              />
+              {/* The clean 3D isometric artwork seamlessly blended with graceful SVG fallback */}
+              {!imageError ? (
+                <Image
+                  src="/assets/dashboard_banner_illustration_clean_1791651742440.jpg"
+                  alt="Discover Amazing Student Projects"
+                  width={560}
+                  height={340}
+                  priority
+                  onError={() => setImageError(true)}
+                  className="object-contain max-h-[270px] scale-105 mix-blend-multiply hover:scale-110 transition-transform duration-500"
+                />
+              ) : (
+                <div className="w-full max-w-[440px] h-[220px] rounded-3xl bg-gradient-to-br from-indigo-500/10 via-purple-500/10 to-blue-500/10 border border-indigo-200/50 p-6 flex items-center justify-around shadow-sm backdrop-blur-xs">
+                  <div className="w-28 h-36 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-700 p-4 text-white flex flex-col justify-between shadow-lg transform -rotate-6">
+                    <span className="text-xl font-mono">&lt;/&gt;</span>
+                    <div className="space-y-1">
+                      <div className="h-1.5 w-12 bg-white/60 rounded" />
+                      <div className="h-1.5 w-16 bg-white/40 rounded" />
+                    </div>
+                  </div>
+                  <div className="w-36 h-40 rounded-2xl bg-white border border-slate-200 p-4 shadow-xl transform rotate-6 flex flex-col justify-between">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-800">Analytics</span>
+                      <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                    </div>
+                    <div className="space-y-2">
+                      <div className="h-2 w-full bg-indigo-100 rounded" />
+                      <div className="h-2 w-3/4 bg-purple-100 rounded" />
+                      <div className="h-2 w-1/2 bg-blue-100 rounded" />
+                    </div>
+                    <span className="text-[10px] font-bold text-indigo-600">SMVITM Showcase</span>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

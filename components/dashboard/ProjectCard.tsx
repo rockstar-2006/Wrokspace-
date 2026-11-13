@@ -303,23 +303,28 @@ export default function ProjectCard({
 
           <div>
             {/* ── Clean Tech Stack Chips ── */}
-            {project.tags && project.tags.length > 0 && (
-              <div className="flex flex-wrap items-center gap-1.5 mb-4">
-                {project.tags.slice(0, 3).map((tag, idx) => (
-                  <span
-                    key={idx}
-                    className="px-2.5 py-0.5 bg-slate-100 hover:bg-indigo-50 border border-slate-200/80 hover:border-indigo-200 text-slate-700 hover:text-indigo-600 text-[11px] font-medium rounded-md transition-all"
-                  >
-                    {tag}
-                  </span>
-                ))}
-                {project.tags.length > 3 && (
-                  <span className="px-2 py-0.5 bg-slate-100 text-slate-500 text-[10px] font-medium rounded-md">
-                    +{project.tags.length - 3}
-                  </span>
-                )}
-              </div>
-            )}
+            {(() => {
+              const cleanedTags = (project.tags || [])
+                .flatMap((t) => (typeof t === "string" ? t.split(/[,;\n]+/).map((s) => s.trim()).filter(Boolean) : []));
+              if (cleanedTags.length === 0) return null;
+              return (
+                <div className="flex flex-wrap items-center gap-1.5 mb-4">
+                  {cleanedTags.slice(0, 3).map((tag, idx) => (
+                    <span
+                      key={idx}
+                      className="px-2.5 py-0.5 bg-slate-100 hover:bg-indigo-50 border border-slate-200/80 hover:border-indigo-200 text-slate-700 hover:text-indigo-600 text-[11px] font-medium rounded-md transition-all"
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                  {cleanedTags.length > 3 && (
+                    <span className="px-2 py-0.5 bg-slate-100 text-slate-500 text-[10px] font-medium rounded-md">
+                      +{cleanedTags.length - 3}
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* ── Footer: Author & View Project Link ── */}
             <div className="pt-3 border-t border-slate-100 flex items-center justify-between">

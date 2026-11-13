@@ -472,7 +472,11 @@ export default function MyProjectsPage() {
                           </p>
 
                           <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
-                            {proj.tags.map((tag, tIdx) => (
+                            {((proj.tags || []).flatMap((t) =>
+                              typeof t === "string"
+                                ? t.split(/[,;\n]+/).map((s) => s.trim()).filter(Boolean)
+                                : []
+                            )).map((tag, tIdx) => (
                               <span
                                 key={tIdx}
                                 className="px-2 py-0.5 rounded-md bg-slate-50 border border-slate-100 text-[10px] font-bold text-slate-600 hover:text-indigo-600 transition-colors"
@@ -509,7 +513,7 @@ export default function MyProjectsPage() {
                         </Link>
 
                         <Link
-                          href="/dashboard/add-project"
+                          href={`/dashboard/add-project?edit=${proj.id}`}
                           className="px-4 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-600 text-xs font-bold inline-flex items-center gap-1.5 transition-colors"
                         >
                           <FileEdit className="w-3.5 h-3.5" />

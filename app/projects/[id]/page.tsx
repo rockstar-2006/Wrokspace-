@@ -34,6 +34,7 @@ import {
   Copy,
   ChevronDown,
   ChevronUp,
+  FileEdit,
 } from "lucide-react";
 import ModernBottomNav from "@/components/dashboard/ModernBottomNav";
 import { Project } from "@/lib/firebase/types";
@@ -481,14 +482,20 @@ export default function SingleProjectDetailsPage() {
 
                   <div className="flex flex-wrap items-center gap-1.5 mb-2.5">
                     {project.tags && project.tags.length > 0 ? (
-                      project.tags.map((tag, idx) => (
-                        <span
-                          key={idx}
-                          className="px-2.5 py-0.5 bg-indigo-50/90 text-indigo-600 border border-indigo-100/90 text-[11px] font-semibold rounded-md"
-                        >
-                          {tag}
-                        </span>
-                      ))
+                      project.tags
+                        .flatMap((t) =>
+                          typeof t === "string"
+                            ? t.split(/[,;\n]+/).map((s) => s.trim()).filter(Boolean)
+                            : []
+                        )
+                        .map((tag, idx) => (
+                          <span
+                            key={idx}
+                            className="px-2.5 py-0.5 bg-indigo-50/90 text-indigo-600 border border-indigo-100/90 text-[11px] font-semibold rounded-md"
+                          >
+                            {tag}
+                          </span>
+                        ))
                     ) : (
                       <span className="px-2.5 py-0.5 bg-indigo-50 text-indigo-600 text-[11px] font-semibold rounded-md">
                         Tech
@@ -552,15 +559,25 @@ export default function SingleProjectDetailsPage() {
                   ) : null}
 
                   {isOwner && (
-                    <button
-                      type="button"
-                      onClick={() => setShowDeleteConfirm(true)}
-                      className="px-3 py-2 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-bold inline-flex items-center gap-1 transition-colors shadow-2xs ml-auto cursor-pointer"
-                      title="Delete Project"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Delete</span>
-                    </button>
+                    <div className="ml-auto inline-flex items-center gap-2">
+                      <Link
+                        href={`/dashboard/add-project?edit=${project.id}`}
+                        className="px-3.5 py-2 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold inline-flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
+                        title="Edit Project Details"
+                      >
+                        <FileEdit className="w-3.5 h-3.5" />
+                        <span>Edit</span>
+                      </Link>
+                      <button
+                        type="button"
+                        onClick={() => setShowDeleteConfirm(true)}
+                        className="px-3 py-2 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-bold inline-flex items-center gap-1 transition-colors shadow-2xs cursor-pointer"
+                        title="Delete Project"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Delete</span>
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>

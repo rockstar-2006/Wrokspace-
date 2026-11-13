@@ -169,13 +169,14 @@ export class FirestoreService {
       const projRef = doc(db, "projects", id);
       const snap = await getDoc(projRef);
       if (snap.exists()) {
-        return snap.data() as Project;
+        const data = snap.data() as Project;
+        return { ...data, id: data.id || snap.id };
       }
     } catch (err) {
       console.warn("Firestore getProjectById fetch failed or offline:", err);
     }
 
-    // 2. Try User Isolated LocalStorage
+    // 2. Try User Isolated & Global LocalStorage
     if (typeof window !== "undefined") {
       try {
         const userProjectsKey = uid ? `projecthub_projects_${uid}` : null;
@@ -183,7 +184,7 @@ export class FirestoreService {
           const userStored = localStorage.getItem(userProjectsKey);
           if (userStored) {
             const list: Project[] = JSON.parse(userStored);
-            const found = list.find((p) => p.id === id);
+            const found = list.find((p) => p.id === id || p.slug === id);
             if (found) return found;
           }
         }
@@ -192,8 +193,25 @@ export class FirestoreService {
         const globalStored = localStorage.getItem("projecthub_user_projects");
         if (globalStored) {
           const list: Project[] = JSON.parse(globalStored);
-          const found = list.find((p) => p.id === id);
+          const found = list.find((p) => p.id === id || p.slug === id);
           if (found) return found;
+        }
+
+        // Deep scan across all localStorage keys for this project ID
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && (key.startsWith("projecthub_projects_") || key.includes("projects"))) {
+            const raw = localStorage.getItem(key);
+            if (raw) {
+              try {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed)) {
+                  const match = parsed.find((p: any) => p && (p.id === id || p.slug === id));
+                  if (match) return match as Project;
+                }
+              } catch {}
+            }
+          }
         }
       } catch (err) {
         console.warn("LocalStorage getProjectById failed:", err);
@@ -201,7 +219,7 @@ export class FirestoreService {
     }
 
     // 3. Fallback to mock FEATURED_PROJECTS
-    const mock = FEATURED_PROJECTS.find((p) => p.id === id);
+    const mock = FEATURED_PROJECTS.find((p) => p.id === id || p.slug === id);
     if (mock) return mock;
 
     return null;
