@@ -12,6 +12,7 @@ import { getAuth, Auth } from "firebase-admin/auth";
  *   FIREBASE_SERVICE_ACCOUNT_KEY   – the service-account JSON (raw or base64)
  *   FIREBASE_SERVICE_ACCOUNT_PATH  – path to the downloaded JSON file
  *   GOOGLE_APPLICATION_CREDENTIALS – standard Google ADC path
+ *   lib/firebase/serviceAccountKey.json – default in-repo service account
  */
 export class AdminNotConfiguredError extends Error {
   constructor() {
@@ -32,8 +33,27 @@ function loadServiceAccount(): ServiceAccount | null {
   const p = process.env.FIREBASE_SERVICE_ACCOUNT_PATH?.trim();
   if (p) {
     const abs = path.isAbsolute(p) ? p : path.join(process.cwd(), p);
-    return JSON.parse(fs.readFileSync(abs, "utf8"));
+    if (fs.existsSync(abs)) {
+      return JSON.parse(fs.readFileSync(abs, "utf8"));
+    }
   }
+
+  // Automatic lookup in known project locations
+  const knownPaths = [
+    path.join(process.cwd(), "lib", "firebase", "serviceAccountKey.json"),
+    path.join(process.cwd(), "lib", "firebase", "workspace-aed6b-firebase-adminsdk-fbsvc-d43204a083.json"),
+    path.join(process.cwd(), "serviceAccountKey.json"),
+  ];
+  for (const kp of knownPaths) {
+    if (fs.existsSync(kp)) {
+      try {
+        return JSON.parse(fs.readFileSync(kp, "utf8"));
+      } catch (e) {
+        console.warn("[admin] failed to parse service account from", kp, e);
+      }
+    }
+  }
+
   return null;
 }
 
@@ -59,7 +79,9 @@ export function isAdminSdkConfigured(): boolean {
   return Boolean(
     process.env.FIREBASE_SERVICE_ACCOUNT_KEY ||
       process.env.FIREBASE_SERVICE_ACCOUNT_PATH ||
-      process.env.GOOGLE_APPLICATION_CREDENTIALS
+      process.env.GOOGLE_APPLICATION_CREDENTIALS ||
+      fs.existsSync(path.join(process.cwd(), "lib", "firebase", "serviceAccountKey.json")) ||
+      fs.existsSync(path.join(process.cwd(), "lib", "firebase", "workspace-aed6b-firebase-adminsdk-fbsvc-d43204a083.json"))
   );
 }
 

@@ -13,7 +13,12 @@ async function call<T>(url: string, init?: RequestInit): Promise<T> {
   });
   const json = await res.json().catch(() => ({}));
   if (res.status === 401 || res.status === 403) {
-    if (typeof window !== "undefined") window.location.href = "/admin/login?error=session";
+    if (typeof window !== "undefined") {
+      const p = window.location.pathname;
+      if (!p.startsWith("/admin/login")) {
+        window.location.href = `/admin/login?next=${encodeURIComponent(p)}`;
+      }
+    }
   }
   if (!res.ok) throw new Error(json?.error || `Request failed (${res.status})`);
   return json as T;
@@ -59,6 +64,11 @@ export const adminApi = {
       }`,
       { method: "DELETE" }
     ),
+  admins: () => call<{ admins: Array<{ id: string; email: string; name: string; role: string; createdAt: string; createdBy?: string }> }>("/api/admin/admins"),
+  addAdmin: (body: { email: string; name: string; password?: string; role?: string }) =>
+    call<{ admin: any; ok: boolean }>("/api/admin/admins", { method: "POST", body: JSON.stringify(body) }),
+  deleteAdmin: (email: string) =>
+    call<{ ok: boolean; removed: string }>(`/api/admin/admins?email=${encodeURIComponent(email)}`, { method: "DELETE" }),
   checkLinks: (urls: string[]) =>
     call<{ results: Array<{ url: string; ok: boolean; status: number; ms: number; error?: string; note?: string }> }>(
       "/api/admin/link-check",

@@ -47,11 +47,11 @@ export default function Navbar() {
           {isLoggedIn ? "Dashboard" : "Get Started"}
         </Link>
         <Link
-          href="#featured"
+          href="/showcase"
           className="hover:text-[#111215] transition-colors flex items-center gap-1.5"
         >
           <span className="w-1.5 h-1.5 rounded-full bg-brand-red inline-block" />
-          Showcase
+          Showcase (Play Store)
         </Link>
         <Link
           href="/dashboard"

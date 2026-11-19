@@ -51,7 +51,7 @@ export async function applyProjectUpdate(
 ): Promise<Project> {
   const ref = adminDb().collection("projects").doc(id);
   const snap = await ref.get();
-  if (!snap.exists) throw new OpError("Project not found", 404);
+  if (!snap.exists) throw new OpError("Project not found in Firebase", 404);
   const data = snap.data() as Project;
   const current = { ...data, id: data.id || snap.id };
 
@@ -123,15 +123,16 @@ export async function applyProjectUpdate(
 export async function deleteProjectAsAdmin(admin: AdminIdentity, id: string, reason?: string) {
   const ref = adminDb().collection("projects").doc(id);
   const snap = await ref.get();
-  if (!snap.exists) throw new OpError("Project not found", 404);
+  if (!snap.exists) throw new OpError("Project not found in Firebase", 404);
   const p = snap.data() as Project;
   await ref.delete();
+
   await logAdminAction(admin, {
     action: "project.delete",
     targetType: "project",
     targetId: id,
-    targetLabel: p.title,
+    targetLabel: p?.title || id,
     note: reason?.trim() || undefined,
-    changes: { status: { from: p.status ?? null, to: "deleted" } },
+    changes: { status: { from: p?.status ?? null, to: "deleted" } },
   });
 }

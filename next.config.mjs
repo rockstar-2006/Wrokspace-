@@ -5,8 +5,14 @@ const nextConfig = {
     unoptimized: true,
   },
   experimental: {
-    // Keep the Admin SDK (and its native gRPC deps) out of the server bundle
     serverComponentsExternalPackages: ['firebase-admin'],
+  },
+  webpack: (config, { isServer }) => {
+    if (isServer) {
+      config.externals = config.externals || [];
+      config.externals.push('firebase-admin');
+    }
+    return config;
   },
 };
 

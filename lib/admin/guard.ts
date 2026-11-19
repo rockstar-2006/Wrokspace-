@@ -12,8 +12,8 @@ export interface AdminIdentity {
 }
 
 /**
- * Verifies the request comes from a signed-in Host/admin (NextAuth Google session
- * whose email is in ADMIN_EMAILS). Returns the identity, or a ready-made error response.
+ * Verifies the request comes from a signed-in Host/admin (NextAuth session
+ * whose email is in ADMIN_EMAILS or Firestore `admins` collection).
  */
 export async function requireAdmin(): Promise<
   { admin: AdminIdentity; error?: undefined } | { admin?: undefined; error: NextResponse }
@@ -23,9 +23,28 @@ export async function requireAdmin(): Promise<
   if (!email) {
     return { error: NextResponse.json({ error: "Not signed in" }, { status: 401 }) };
   }
-  if (!isAdminEmail(email)) {
+
+  let isAllowed = isAdminEmail(email);
+
+  if (!isAllowed) {
+    try {
+      const docId = email.replace(/[^a-z0-9_.-]/g, "_");
+      const snap = await adminDb().collection("admins").doc(docId).get();
+      if (snap.exists) {
+        isAllowed = true;
+      } else {
+        const q = await adminDb().collection("admins").where("email", "==", email).limit(1).get();
+        if (!q.empty) isAllowed = true;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  if (!isAllowed) {
     return { error: NextResponse.json({ error: "This account is not an administrator" }, { status: 403 }) };
   }
+
   return {
     admin: {
       email,
@@ -35,20 +54,21 @@ export async function requireAdmin(): Promise<
   };
 }
 
-/** Writes an entry to the `auditLogs` collection. Never throws: a logging failure must not undo an admin action. */
+/** Writes an entry to the `auditLogs` collection in Firebase Firestore. */
 export async function logAdminAction(
   admin: AdminIdentity,
   entry: Omit<AuditLogEntry, "id" | "actorEmail" | "actorName" | "createdAt">
 ): Promise<void> {
+  const clean: Record<string, unknown> = {
+    ...entry,
+    actorEmail: admin.email,
+    actorName: admin.name,
+    createdAt: new Date().toISOString(),
+  };
+  Object.keys(clean).forEach((k) => clean[k] === undefined && delete clean[k]);
+  if (clean.changes) clean.changes = JSON.parse(JSON.stringify(clean.changes));
+
   try {
-    const clean: Record<string, unknown> = {
-      ...entry,
-      actorEmail: admin.email,
-      actorName: admin.name,
-      createdAt: new Date().toISOString(),
-    };
-    Object.keys(clean).forEach((k) => clean[k] === undefined && delete clean[k]);
-    if (clean.changes) clean.changes = JSON.parse(JSON.stringify(clean.changes));
     await adminDb().collection("auditLogs").add(clean);
   } catch (err) {
     console.warn("[admin] audit log write failed:", err);

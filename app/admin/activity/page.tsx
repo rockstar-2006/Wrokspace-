@@ -14,6 +14,26 @@ function fmt(v: unknown): string {
   return String(v);
 }
 
+const AUDIT_CACHE_KEY = "projecthub_admin_audit_cache_v1";
+
+function readAuditCache(): AuditLogEntry[] | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = sessionStorage.getItem(AUDIT_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {}
+  return null;
+}
+
+function writeAuditCache(logs: AuditLogEntry[]) {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.setItem(AUDIT_CACHE_KEY, JSON.stringify(logs));
+  } catch {}
+}
+
 export default function AuditLogPage() {
   const [logs, setLogs] = useState<AuditLogEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -23,11 +43,20 @@ export default function AuditLogPage() {
   const [action, setAction] = useState("all");
   const [actor, setActor] = useState("all");
 
-  const load = async () => {
+  const load = async (force = false) => {
+    if (!force) {
+      const cached = readAuditCache();
+      if (cached) {
+        setLogs(cached);
+        return;
+      }
+    }
     setLoading(true);
     setError(null);
     try {
-      setLogs((await adminApi.audit(1000)).logs);
+      const data = (await adminApi.audit(1000)).logs;
+      setLogs(data);
+      writeAuditCache(data);
     } catch (e: any) {
       setError(e?.message || "Failed to load audit log");
     } finally {
@@ -36,7 +65,7 @@ export default function AuditLogPage() {
   };
 
   useEffect(() => {
-    load();
+    load(false);
   }, []);
 
   const actors = useMemo(() => Array.from(new Set((logs || []).map((l) => l.actorEmail))).sort(), [logs]);
@@ -71,8 +100,8 @@ export default function AuditLogPage() {
         subtitle="Every action taken in the Host console — who, what, when and why."
         actions={
           <>
-            <Button onClick={load} loading={loading}>
-              <RefreshCw className="w-4 h-4" /> Refresh
+            <Button onClick={() => load(true)} loading={loading}>
+              <RefreshCw className="w-4 h-4" /> Refresh from Firebase
             </Button>
             <Button
               disabled={!filtered.length}

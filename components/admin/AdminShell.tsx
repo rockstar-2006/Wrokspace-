@@ -33,7 +33,13 @@ const NAV = [
 
 export default function AdminShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { admin, projects, reload, loading, lastLoadedAt, error } = useAdminData();
+
+  // On login page, render children directly without the admin console shell or navigation
+  if (pathname === "/admin/login" || pathname?.startsWith("/admin/login")) {
+    return <>{children}</>;
+  }
+
+  const { admin, projects, reload, loading, isRefreshing, lastLoadedAt, error } = useAdminData();
   const [menuOpen, setMenuOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [, forceTick] = useState(0);
@@ -156,24 +162,26 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
             </button>
             <span className="lg:hidden">{brand}</span>
             <span className="hidden lg:inline-flex items-center gap-2 text-xs font-semibold text-slate-500">
-              <span className={`w-2 h-2 rounded-full ${loading ? "bg-amber-400 animate-pulse" : error ? "bg-rose-500" : "bg-emerald-500"}`} />
-              {loading
-                ? "Syncing with Firestore…"
+              <span className={`w-2 h-2 rounded-full ${isRefreshing ? "bg-amber-400 animate-pulse" : error ? "bg-rose-500" : "bg-emerald-500"}`} />
+              {isRefreshing
+                ? "Fetching fresh data from Firebase…"
                 : error
                 ? "Sync failed"
-                : `Synced ${lastLoadedAt ? timeAgo(new Date(lastLoadedAt).toISOString()) : ""}`}
+                : lastLoadedAt
+                ? `Cached (synced ${timeAgo(new Date(lastLoadedAt).toISOString())})`
+                : "Ready"}
             </span>
           </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => reload()}
-              disabled={loading}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-              title="Reload data from Firestore"
+              onClick={() => reload(true)}
+              disabled={isRefreshing}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50 transition-all hover:border-slate-300 shadow-xs"
+              title="Fetch fresh data from Firebase"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
-              <span className="hidden sm:inline">Refresh</span>
+              <RefreshCw className={`w-3.5 h-3.5 text-indigo-600 ${isRefreshing ? "animate-spin" : ""}`} />
+              <span className="hidden sm:inline">Refresh from Firebase</span>
             </button>
             <Link
               href="/dashboard"

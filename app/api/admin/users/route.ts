@@ -8,10 +8,11 @@ import type { StudentProfile } from "@/lib/firebase/types";
 
 export const dynamic = "force-dynamic";
 
-/** GET /api/admin/users — every registered account, flagged with isHost when on the ADMIN_EMAILS list. */
+/** GET /api/admin/users — every registered account from Firebase, flagged with isHost when on the ADMIN_EMAILS list. */
 export async function GET() {
   const { error } = await requireAdmin();
   if (error) return error;
+
   try {
     const [snap, authEmails] = await Promise.all([adminDb().collection("users").get(), authEmailsByUid()]);
     const users = snap.docs.map((d) => {
@@ -23,14 +24,15 @@ export async function GET() {
         fullName: str(data.fullName),
         skills: Array.isArray(data.skills) ? data.skills.map((s: unknown) => str(s)).filter(Boolean) : [],
         accountStatus: data.accountStatus === "suspended" ? "suspended" : "active",
-        // Verified sign-in email (null for legacy profiles that haven't signed in since the lock-down)
         signInEmail: authEmails.get(d.id) || null,
         isHost: isAdminEmail(authEmails.get(d.id) || (authEmails.has(d.id) ? "" : str(data.email))),
       };
     });
+
     users.sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
     return NextResponse.json({ users });
   } catch (err) {
+    console.error("[admin] Firebase users query failed:", err);
     return dbError(err);
   }
 }

@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, jsonError } from "@/lib/admin/guard";
-import { AdminNotConfiguredError } from "@/lib/admin/firebaseAdmin";
 import { applyProjectUpdate, deleteProjectAsAdmin, OpError, ProjectUpdateInput } from "@/lib/admin/projectOps";
 
 export const dynamic = "force-dynamic";
@@ -29,11 +28,10 @@ export async function POST(req: NextRequest) {
       else await applyProjectUpdate(admin, id, update);
       results.push({ id, ok: true });
     } catch (err) {
-      if (err instanceof AdminNotConfiguredError) return jsonError(err.message, 503);
       results.push({
         id,
         ok: false,
-        error: err instanceof OpError ? err.message : (err as any)?.message || "Database operation failed",
+        error: err instanceof OpError ? err.message : (err as any)?.message || "Operation failed",
       });
     }
   }

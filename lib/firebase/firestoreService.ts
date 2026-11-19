@@ -454,7 +454,8 @@ export class FirestoreService {
       const querySnap = await getDocs(q);
       const list: Project[] = [];
       querySnap.forEach((doc) => {
-        list.push(doc.data() as Project);
+        const data = doc.data() as Project;
+        list.push({ ...data, id: data.id || doc.id });
       });
       return list;
     } catch (err) {

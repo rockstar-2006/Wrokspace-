@@ -15,11 +15,12 @@ const ASSIGNABLE_ROLES = ["student", "user"] as const;
 export async function PATCH(req: NextRequest, { params }: { params: { uid: string } }) {
   const { admin, error } = await requireAdmin();
   if (error) return error;
+
   try {
     const body = await req.json().catch(() => ({}));
     const ref = adminDb().collection("users").doc(params.uid);
     const snap = await ref.get();
-    if (!snap.exists) return jsonError("User not found", 404);
+    if (!snap.exists) return jsonError("User not found in Firebase", 404);
     const current = snap.data() as StudentProfile;
 
     const patch: Record<string, unknown> = {};
@@ -55,15 +56,12 @@ export async function PATCH(req: NextRequest, { params }: { params: { uid: strin
     patch.updatedAt = new Date().toISOString();
     await ref.update(patch);
 
-    // Suspension also disables the Firebase Auth account and revokes live sessions,
-    // so the student can't keep writing with an already-issued ID token.
     if (patch.accountStatus) {
       try {
         const disabled = patch.accountStatus === "suspended";
         await adminAuth().updateUser(params.uid, { disabled });
         if (disabled) await adminAuth().revokeRefreshTokens(params.uid);
       } catch (e: any) {
-        // Legacy (pre-lockdown) profiles may not have a Firebase Auth user yet
         if (e?.code !== "auth/user-not-found") console.warn("[admin] auth update failed:", e?.message);
       }
     }
@@ -86,17 +84,19 @@ export async function PATCH(req: NextRequest, { params }: { params: { uid: strin
 export async function DELETE(req: NextRequest, { params }: { params: { uid: string } }) {
   const { admin, error } = await requireAdmin();
   if (error) return error;
+
   try {
     const db = adminDb();
     const ref = db.collection("users").doc(params.uid);
     const snap = await ref.get();
-    if (!snap.exists) return jsonError("User not found", 404);
+    if (!snap.exists) return jsonError("User not found in Firebase", 404);
     const current = snap.data() as StudentProfile;
     if (await isHostAccount(params.uid, current.email)) return jsonError("Host accounts cannot be deleted from the panel");
 
     const withProjects = req.nextUrl.searchParams.get("withProjects") === "1";
     const reason = req.nextUrl.searchParams.get("reason") || undefined;
     let removedProjects = 0;
+
     if (withProjects) {
       const owned = await db.collection("projects").where("ownerId", "==", params.uid).get();
       const batch = db.batch();
@@ -104,13 +104,15 @@ export async function DELETE(req: NextRequest, { params }: { params: { uid: stri
       if (owned.size) await batch.commit();
       removedProjects = owned.size;
     }
+
     await ref.delete();
-    // Remove the sign-in identity too, so the account is really gone
+
     try {
       await adminAuth().deleteUser(params.uid);
     } catch (e: any) {
       if (e?.code !== "auth/user-not-found") console.warn("[admin] auth delete failed:", e?.message);
     }
+
     await logAdminAction(admin, {
       action: "user.delete",
       targetType: "user",
