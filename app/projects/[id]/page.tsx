@@ -188,7 +188,9 @@ export default function SingleProjectDetailsPage() {
     if (!project) return;
     setIsDeleting(true);
     try {
-      await FirestoreService.deleteProject(project.id, user?.uid || profile?.uid);
+      if (!(await FirestoreService.deleteProject(project.id, user?.uid || profile?.uid))) {
+        throw new Error("Server rejected the delete");
+      }
       setShowDeleteConfirm(false);
       router.push("/dashboard");
     } catch (err) {

@@ -132,6 +132,23 @@ export default function AddNewProjectPage() {
   // Stepper State: 1 to 5
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3 | 4 | 5>(1);
 
+  // Host-controlled submission window (Admin → Portal settings). Editing existing projects is always allowed.
+  const [submissionsClosedMessage, setSubmissionsClosedMessage] = useState<string | null>(null);
+  const [isEditRoute, setIsEditRoute] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const p = new URLSearchParams(window.location.search);
+    setIsEditRoute(Boolean(p.get("edit") || p.get("id")));
+    fetch("/api/settings")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (j && j.submissionsOpen === false) {
+          setSubmissionsClosedMessage(j.submissionsClosedMessage || "Project submissions are currently closed.");
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   // Top Page ScrollTrigger Scrubbed Reading Progress Bar
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -802,7 +819,12 @@ export default function AddNewProjectPage() {
       }
 
       // 4. Persist to Firestore database
-      await FirestoreService.saveProject(projectPayload);
+      const savedToServer = await FirestoreService.saveProject(projectPayload);
+      if (!savedToServer) {
+        throw new Error(
+          "Your project was kept on this device but couldn't be saved to the server. Please sign in again and retry."
+        );
+      }
 
       setSubmissionSuccess(status);
       setTimeout(() => {
@@ -816,6 +838,29 @@ export default function AddNewProjectPage() {
   };
 
   const progressPercent = ((currentStep - 1) / 4) * 100;
+
+  if (submissionsClosedMessage && !isEditRoute && !editingProjectId) {
+    return (
+      <div className="min-h-screen bg-[#F8FAFC] flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-white rounded-3xl border border-slate-200 shadow-sm p-8 text-center">
+          <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center mb-4">
+            <Settings className="w-7 h-7" />
+          </div>
+          <h1 className="text-xl font-black text-[#0F172A]">Submissions are closed</h1>
+          <p className="text-sm text-slate-500 mt-2 leading-relaxed whitespace-pre-wrap">{submissionsClosedMessage}</p>
+          <p className="text-xs text-slate-400 mt-3">You can still edit your existing projects from My Projects.</p>
+          <div className="mt-6 flex items-center justify-center gap-3">
+            <Link href="/dashboard/my-projects" className="px-4 py-2.5 rounded-xl bg-[#0F172A] text-white text-xs font-bold">
+              My Projects
+            </Link>
+            <Link href="/dashboard" className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 text-xs font-bold">
+              Back to dashboard
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] pb-28 selection:bg-[#4338CA] selection:text-white flex flex-col">

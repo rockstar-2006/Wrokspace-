@@ -1,0 +1,97 @@
+rules_version = '2';
+
+// ProjectHub — Firestore security rules
+//
+// Model:
+//  • Every student is a real Firebase Auth user; their profile lives at users/{auth.uid}.
+//  • Students can create/edit/delete only their own profile and projects.
+//  • Review & moderation fields (status beyond Draft/Pending review, featured, review notes,
+//    role, account status) are written ONLY by the Host console through the Firebase Admin SDK,
+//    which bypasses these rules. auditLogs and settings are server-only.
+//  • Anyone (even signed out) can read Published projects; owners can read their own drafts.
+//
+// Deploy:  npx firebase-tools deploy --only firestore:rules
+//   (or paste this file into Firebase Console → Firestore Database → Rules → Publish)
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function myProfilePath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    // Suspended accounts are also disabled in Firebase Auth by the Host console;
+    // this check covers tokens issued before the suspension.
+    function notSuspended() {
+      return !exists(myProfilePath())
+        || get(myProfilePath()).data.get('accountStatus', 'active') != 'suspended';
+    }
+
+    // ───────────────────────────── users ─────────────────────────────
+    match /users/{uid} {
+      // Own profile only. Teammate lookup goes through /api/students/lookup,
+      // which returns a minimal public card.
+      allow read: if isSelf(uid);
+
+      allow create: if isSelf(uid)
+        && request.resource.data.uid == uid
+        && request.resource.data.get('role', 'student') in ['student', 'user']
+        && !request.resource.data.keys().hasAny(
+             ['accountStatus', 'suspendedReason', 'suspendedAt', 'migratedFrom', 'migratedAt']);
+
+      allow update: if isSelf(uid) && notSuspended()
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(
+             ['uid', 'role', 'accountStatus', 'suspendedReason', 'suspendedAt', 'migratedFrom', 'migratedAt']);
+
+      // Account deletion is a Host action
+      allow delete: if false;
+    }
+
+    // ──────────────────────────── projects ───────────────────────────
+    function hostOnlyProjectFields() {
+      return ['featured', 'reviewNotes', 'reviewedBy', 'reviewedAt', 'reviewHistory', 'publishedDate'];
+    }
+
+    // The only statuses a student may set: save a draft, or (re)submit for review.
+    function studentStatus(s) {
+      return s in ['Draft', 'Pending review'];
+    }
+
+    match /projects/{projectId} {
+      allow read: if resource.data.get('status', '') == 'Published'
+        || (signedIn() && resource.data.get('ownerId', '') == request.auth.uid);
+
+      allow create: if signedIn() && notSuspended()
+        && request.resource.data.ownerId == request.auth.uid
+        && studentStatus(request.resource.data.get('status', ''))
+        && !request.resource.data.keys().hasAny(hostOnlyProjectFields());
+
+      allow update: if signedIn() && notSuspended()
+        && resource.data.get('ownerId', '') == request.auth.uid
+        && request.resource.data.ownerId == request.auth.uid
+        && studentStatus(request.resource.data.get('status', ''))
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(hostOnlyProjectFields());
+
+      allow delete: if signedIn() && resource.data.get('ownerId', '') == request.auth.uid;
+    }
+
+    // ─────────────────────── server-only collections ───────────────────────
+    match /auditLogs/{id} {
+      allow read, write: if false;
+    }
+
+    match /settings/{id} {
+      allow read, write: if false;
+    }
+
+    // Everything else is closed by default (no other collections are used by the app).
+  }
+}

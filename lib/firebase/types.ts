@@ -38,6 +38,11 @@ export interface StudentProfile {
   followersCount: number;
   profileCompleted: boolean;
   updatedAt?: string;
+  createdAt?: string;
+  /** Set by the Host/admin panel. Suspended accounts cannot sign in. */
+  accountStatus?: "active" | "suspended";
+  suspendedReason?: string;
+  suspendedAt?: string;
 }
 
 export type ProjectCategory =
@@ -122,6 +127,10 @@ export interface Project {
   createdAt?: string;
   updatedAt?: string;
   slug?: string;
+  /** Latest feedback from the reviewer, shown to the student. */
   reviewNotes?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  reviewHistory?: Array<{ status: ProjectStatus; note?: string; by: string; at: string }>;
   finalYearProject?: boolean;
 }

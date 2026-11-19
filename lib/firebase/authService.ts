@@ -7,7 +7,56 @@ const AUTH_STORAGE_KEY = "projecthub_auth_user";
 const PROFILE_STORAGE_KEY = "projecthub_student_profile";
 const REGISTRY_STORAGE_KEY = "projecthub_accounts_registry";
 
+/** Thrown when the Host's portal policy blocks a sign-in (suspended account / disallowed domain). */
+export class AccessDeniedError extends Error {
+  code: string;
+  constructor(code: "projecthub/suspended" | "projecthub/domain-not-allowed", message: string) {
+    super(message);
+    this.code = code;
+  }
+}
+
 export class AuthService {
+  /** True while an explicit sign-in is running, so the auth-state listener doesn't race it. */
+  static signingIn = false;
+
+  /** Public portal policy set by the Host in the admin console. Fails open if the API is unreachable. */
+  static async getPortalPolicy(): Promise<{ allowedEmailDomains: string[] }> {
+    if (typeof window === "undefined") return { allowedEmailDomains: [] };
+    try {
+      const res = await fetch("/api/settings", { cache: "no-store" });
+      if (!res.ok) return { allowedEmailDomains: [] };
+      const json = await res.json();
+      return { allowedEmailDomains: Array.isArray(json?.allowedEmailDomains) ? json.allowedEmailDomains : [] };
+    } catch {
+      return { allowedEmailDomains: [] };
+    }
+  }
+
+  static async assertDomainAllowed(email: string): Promise<void> {
+    const { allowedEmailDomains } = await this.getPortalPolicy();
+    if (!allowedEmailDomains.length) return;
+    const domain = (email.split("@")[1] || "").toLowerCase();
+    const ok = allowedEmailDomains.some((d) => domain === d || domain.endsWith(`.${d}`));
+    if (!ok) {
+      throw new AccessDeniedError(
+        "projecthub/domain-not-allowed",
+        `Sign-in is limited to ${allowedEmailDomains.map((d) => "@" + d).join(", ")} accounts. Please use your institution email.`
+      );
+    }
+  }
+
+  static assertNotSuspended(profile?: Partial<StudentProfile> | null): void {
+    if (profile?.accountStatus === "suspended") {
+      throw new AccessDeniedError(
+        "projecthub/suspended",
+        `This account has been suspended by the portal administrator${
+          profile.suspendedReason ? `: ${profile.suspendedReason}` : "."
+        }`
+      );
+    }
+  }
+
   /**
    * Get registry of all registered accounts for account isolation
    */
@@ -339,202 +388,178 @@ export class AuthService {
   }
 
   /**
-   * Sign In with Email or Register Number (USN)
-   * Checks Firestore and Local Storage to distinguish Old vs New user
+   * Turns an email or USN into the Firebase sign-in email.
+   * USNs use a synthetic address so they can have a real password.
+   */
+  static identifierToEmail(identifier: string): { email: string; isEmail: boolean } {
+    const trimmed = identifier.trim();
+    const isEmail = trimmed.includes("@");
+    return {
+      isEmail,
+      email: isEmail
+        ? trimmed.toLowerCase()
+        : `${trimmed.toLowerCase().replace(/[^a-z0-9]/g, "")}@student.college.edu`,
+    };
+  }
+
+  /**
+   * Sign in with Email or Register Number (USN) + password — real Firebase Authentication.
+   * First-time users are registered automatically (same "sign in to create" UX as before).
    */
   static async signIn(
     identifier: string,
     password: string,
     role: UserRole = "student"
   ): Promise<{ user: AuthUser; profile: StudentProfile; isNewUser: boolean }> {
+    this.signingIn = true;
+    try {
+      return await this.signInInner(identifier, password, role);
+    } finally {
+      this.signingIn = false;
+    }
+  }
+
+  private static async signInInner(
+    identifier: string,
+    password: string,
+    role: UserRole
+  ): Promise<{ user: AuthUser; profile: StudentProfile; isNewUser: boolean }> {
     const trimmedId = identifier.trim();
-    const isEmail = trimmedId.includes("@");
-    const emailToUse = isEmail
-      ? trimmedId.toLowerCase()
-      : `${trimmedId.toLowerCase().replace(/[^a-z0-9]/g, "")}@student.college.edu`;
+    const { email, isEmail } = this.identifierToEmail(trimmedId);
+    if (isEmail) await this.assertDomainAllowed(email);
 
-    const canonicalUid = isEmail
-      ? `email_${emailToUse.replace(/[^a-z0-9]/g, "_")}`
-      : `usn_${trimmedId.toLowerCase().replace(/[^a-z0-9]/g, "_")}`;
+    const {
+      signInWithEmailAndPassword,
+      createUserWithEmailAndPassword,
+      updateProfile: updateFbProfile,
+    } = await import("firebase/auth");
+    const { auth } = await import("./config");
 
-    // 1. First check real Firestore to see if this is an existing old user
-    const firestoreResult = await FirestoreService.getUserProfile(canonicalUid, emailToUse);
-    if (firestoreResult.isExisting && firestoreResult.profile) {
-      const existingProfile = firestoreResult.profile;
-      const user: AuthUser = {
-        uid: canonicalUid,
-        email: emailToUse,
-        displayName: existingProfile.fullName || trimmedId.split("@")[0],
-        role: existingProfile.role || role,
-        registerNumber: !isEmail ? trimmedId.toUpperCase() : undefined,
-      };
-      this.saveSession(user, existingProfile);
-      return {
-        user,
-        profile: existingProfile,
-        isNewUser: !existingProfile.profileCompleted,
-      };
+    let fbUser;
+    try {
+      fbUser = (await signInWithEmailAndPassword(auth, email, password)).user;
+    } catch (err: any) {
+      const code = err?.code || "";
+      // With email-enumeration protection Firebase can't tell "no account" from "wrong password",
+      // so try to register; "email already in use" then means the password was wrong.
+      if (code === "auth/invalid-credential" || code === "auth/user-not-found" || code === "auth/invalid-login-credentials") {
+        try {
+          fbUser = (await createUserWithEmailAndPassword(auth, email, password)).user;
+          const displayName = isEmail ? trimmedId.split("@")[0] : trimmedId.toUpperCase();
+          await updateFbProfile(fbUser, { displayName }).catch(() => {});
+        } catch (createErr: any) {
+          if (createErr?.code === "auth/email-already-in-use") {
+            const e: any = new Error(
+              "Incorrect password. If you created this account with Google, use “Continue with Google” instead."
+            );
+            e.code = "auth/wrong-password";
+            throw e;
+          }
+          throw createErr;
+        }
+      } else {
+        throw err;
+      }
     }
 
-    // 2. Check local accounts registry
-    const accountKey = emailToUse.toLowerCase();
-    const registry = this.getRegistry();
-    if (registry[accountKey]) {
-      const existing = registry[accountKey];
-      const user: AuthUser = {
-        ...existing.user,
-        uid: canonicalUid,
-        role,
-      };
-      const profile: StudentProfile = {
-        ...existing.profile,
-        uid: canonicalUid,
-        role,
-        studentCode: existing.profile.studentCode || generateStudentCode(),
-      };
-      this.saveSession(user, profile);
-      // Sync to Firestore in background
-      FirestoreService.saveUserProfile(profile);
-      return {
-        user,
-        profile,
-        isNewUser: !profile.profileCompleted,
-      };
-    }
-
-    // 3. Brand New User Registration
-    const user: AuthUser = {
-      uid: canonicalUid,
-      email: emailToUse,
-      displayName: isEmail ? trimmedId.split("@")[0] : trimmedId,
-      role,
+    return this.completeFirebaseSignIn(fbUser, role, {
       registerNumber: !isEmail ? trimmedId.toUpperCase() : undefined,
-    };
+    });
+  }
 
-    const cleanProfile = createEmptyStudentProfile(
-      canonicalUid,
-      emailToUse,
-      user.displayName,
-      role
-    );
-    cleanProfile.studentCode = generateStudentCode();
-    if (!isEmail) {
-      cleanProfile.usn = trimmedId.toUpperCase();
+  /** Moves a pre-lockdown profile (stored under a made-up id) onto this real Firebase account. */
+  static async claimLegacyAccount(fbUser: { getIdToken: () => Promise<string> }): Promise<StudentProfile | null> {
+    try {
+      const token = await fbUser.getIdToken();
+      const res = await fetch("/api/account/claim-legacy", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.status === 503) {
+        console.warn("[auth] Legacy account upgrade unavailable: Firebase Admin SDK not configured on the server.");
+        return null;
+      }
+      if (!res.ok) return null;
+      const json = await res.json();
+      return json?.status === "migrated" ? (json.profile as StudentProfile) : null;
+    } catch {
+      return null;
     }
-
-    this.saveSession(user, cleanProfile);
-    await FirestoreService.saveUserProfile(cleanProfile);
-    return { user, profile: cleanProfile, isNewUser: true };
   }
 
   /**
-   * Sign In with Google Account with strict deterministic isolation and Firestore persistence
+   * Shared tail of every sign-in method: the Firebase user's uid IS the profile id
+   * (users/{uid}), which is what the Firestore security rules check.
    */
-  static async signInWithGoogleAccount(
-    account: {
-      email: string;
-      displayName: string;
-      photoURL?: string;
+  static async completeFirebaseSignIn(
+    fbUser: {
+      uid: string;
+      email: string | null;
+      displayName: string | null;
+      photoURL: string | null;
+      getIdToken: () => Promise<string>;
     },
     role: UserRole = "student",
-    customUid?: string
+    extras: { registerNumber?: string } = {}
   ): Promise<{ user: AuthUser; profile: StudentProfile; isNewUser: boolean }> {
-    const email = account.email.trim().toLowerCase();
-    // Deterministic canonical UID ensures refreshing never scrambles the user's account
-    const cleanUid = customUid || `google_${email.replace(/[^a-z0-9]/g, "_")}`;
-    const accountKey = email;
-    const registry = this.getRegistry();
+    const uid = fbUser.uid;
+    const email = (fbUser.email || "").toLowerCase();
+    if (!email) throw new Error("No email returned for this account.");
+    await this.assertDomainAllowed(email);
 
-    // 1. Check Firestore first - if document exists, this is an OLD user
-    const firestoreResult = await FirestoreService.getUserProfile(cleanUid, email);
-    if (firestoreResult.isExisting && firestoreResult.profile) {
-      const existingProfile = firestoreResult.profile;
-      // Get stored isolated local profile if any, to ensure most recent edits (e.g. chosen mascot) are never lost
-      const localIsolatedProfile = typeof window !== "undefined" ? this.getStoredProfile(cleanUid) : null;
-      const preservedPhoto = localIsolatedProfile?.photoURL || existingProfile.photoURL || account.photoURL || "";
-      const preservedRing = localIsolatedProfile?.avatarRingStyle || existingProfile.avatarRingStyle || "instagram";
-
-      const user: AuthUser = {
-        uid: cleanUid,
-        email,
-        displayName: existingProfile.fullName || account.displayName || email.split("@")[0],
-        role: existingProfile.role || role,
-        photoURL: preservedPhoto,
-      };
-      const mergedProfile: StudentProfile = {
-        ...existingProfile,
-        photoURL: preservedPhoto,
-        avatarRingStyle: preservedRing,
-        studentCode: existingProfile.studentCode || generateStudentCode(),
-      };
-      this.saveSession(user, mergedProfile);
-      return {
-        user,
-        profile: mergedProfile,
-        isNewUser: !mergedProfile.profileCompleted,
-      };
+    let { profile } = await FirestoreService.getUserProfile(uid);
+    if (!profile || !profile.profileCompleted) {
+      const claimed = await this.claimLegacyAccount(fbUser);
+      if (claimed) profile = claimed;
     }
 
-    // 2. Check local registry
-    if (registry[accountKey]) {
-      const existing = registry[accountKey];
-      const localIsolatedProfile = typeof window !== "undefined" ? this.getStoredProfile(cleanUid) : null;
-      const preservedPhoto = localIsolatedProfile?.photoURL || existing.profile?.photoURL || existing.user?.photoURL || account.photoURL || "";
-      const preservedRing = localIsolatedProfile?.avatarRingStyle || existing.profile?.avatarRingStyle || "instagram";
-
-      const user: AuthUser = {
-        ...existing.user,
-        uid: cleanUid,
-        role,
-        photoURL: preservedPhoto,
-      };
-      const profile: StudentProfile = {
-        ...existing.profile,
-        uid: cleanUid,
-        role,
-        photoURL: preservedPhoto,
-        avatarRingStyle: preservedRing,
-        studentCode: existing.profile.studentCode || generateStudentCode(),
-      };
-      this.saveSession(user, profile);
-      // Sync to Firestore in background
-      FirestoreService.saveUserProfile(profile);
-      return {
-        user,
-        profile,
-        isNewUser: !profile.profileCompleted,
-      };
+    try {
+      this.assertNotSuspended(profile);
+    } catch (e) {
+      const { signOut } = await import("firebase/auth");
+      const { auth } = await import("./config");
+      await signOut(auth).catch(() => {});
+      throw e;
     }
 
-    // 3. Brand New User
-    const localIsolatedProfile = typeof window !== "undefined" ? this.getStoredProfile(cleanUid) : null;
-    const initialPhoto = localIsolatedProfile?.photoURL || account.photoURL || "";
-    const initialRing = localIsolatedProfile?.avatarRingStyle || "instagram";
+    // Keep the user's most recent local avatar choices (e.g. mascot) if any
+    const local = typeof window !== "undefined" ? this.getStoredProfile(uid) : null;
+    const localPhoto = local?.uid === uid ? local.photoURL : "";
+    const localRing = local?.uid === uid ? local.avatarRingStyle : undefined;
+
+    let isNew = false;
+    if (!profile) {
+      isNew = true;
+      const displayName = fbUser.displayName || email.split("@")[0];
+      profile = createEmptyStudentProfile(uid, email, displayName, role);
+      profile.photoURL = localPhoto || fbUser.photoURL || "";
+      profile.avatarRingStyle = localRing || "instagram";
+      profile.studentCode = generateStudentCode();
+      if (extras.registerNumber) profile.usn = extras.registerNumber;
+      const saved = await FirestoreService.saveUserProfile(profile, { create: true });
+      if (!saved) {
+        throw new Error("Your account was created, but its profile could not be saved. Please try again.");
+      }
+    } else {
+      profile = {
+        ...profile,
+        uid,
+        photoURL: localPhoto || profile.photoURL || fbUser.photoURL || "",
+        avatarRingStyle: localRing || profile.avatarRingStyle || "instagram",
+        studentCode: profile.studentCode || generateStudentCode(),
+      };
+    }
 
     const user: AuthUser = {
-      uid: cleanUid,
+      uid,
       email,
-      displayName: account.displayName || email.split("@")[0],
-      role,
-      photoURL: initialPhoto,
+      displayName: profile.fullName || fbUser.displayName || email.split("@")[0],
+      role: profile.role || role,
+      photoURL: profile.photoURL,
+      registerNumber: extras.registerNumber,
     };
-
-    const newProfile = createEmptyStudentProfile(
-      cleanUid,
-      email,
-      user.displayName,
-      role
-    );
-    newProfile.photoURL = initialPhoto;
-    newProfile.avatarRingStyle = initialRing;
-    newProfile.studentCode = generateStudentCode();
-
-    const profileSaved = await FirestoreService.saveUserProfile(newProfile);
-    if (!profileSaved) {
-      throw new Error("Your Google account was authenticated, but its profile could not be saved. Please try again.");
-    }
-    this.saveSession(user, newProfile);
-    return { user, profile: newProfile, isNewUser: true };
+    this.saveSession(user, profile);
+    return { user, profile, isNewUser: isNew || !profile.profileCompleted };
   }
 
   /**
@@ -548,61 +573,40 @@ export class AuthService {
   static async signInWithRealGoogle(
     role: UserRole = "student"
   ): Promise<{ user: AuthUser; profile: StudentProfile; isNewUser: boolean }> {
-    const {
-      signInWithPopup,
-      signInWithRedirect,
-      GoogleAuthProvider,
-    } = await import("firebase/auth");
+    const { signInWithPopup, signInWithRedirect, GoogleAuthProvider } = await import("firebase/auth");
     const { auth } = await import("./config");
 
-    // Always create a fresh provider instance to avoid stale state issues
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: "select_account" });
     provider.addScope("email");
     provider.addScope("profile");
 
+    this.signingIn = true;
     try {
-      // Attempt popup first
       const result = await signInWithPopup(auth, provider);
       if (!result.user?.email) {
         throw new Error("No email returned from Google account.");
       }
-      return this.signInWithGoogleAccount(
-        {
-          email: result.user.email,
-          displayName: result.user.displayName || result.user.email.split("@")[0],
-          photoURL: result.user.photoURL || undefined,
-        },
-        role,
-        result.user.uid
-      );
+      return this.completeFirebaseSignIn(result.user, role);
     } catch (popupErr: any) {
-      // User closed the popup — don't fall back, let caller handle silently
-      if (
-        popupErr?.code === "auth/popup-closed-by-user" ||
-        popupErr?.code === "auth/cancelled-popup-request"
-      ) {
+      if (popupErr?.code === "auth/popup-closed-by-user" || popupErr?.code === "auth/cancelled-popup-request") {
         throw popupErr;
       }
-
-      // Popup was blocked or unauthorized domain — fall back to redirect
       if (
         popupErr?.code === "auth/popup-blocked" ||
         popupErr?.code === "auth/unauthorized-domain" ||
         popupErr?.code === "auth/operation-not-supported-in-this-environment"
       ) {
-        // Store the role so we can resume after redirect lands back
         if (typeof sessionStorage !== "undefined") {
           sessionStorage.setItem("projecthub_google_redirect_role", role);
           sessionStorage.setItem("projecthub_google_redirect_pending", "true");
         }
         await signInWithRedirect(auth, provider);
-        // signInWithRedirect navigates away — this line is never reached
         throw new Error("Redirecting to Google…");
       }
-
-      // All other errors — rethrow with the real Firebase error code attached
       throw popupErr;
+    } finally {
+      this.signingIn = false;
     }
   }
 
@@ -616,7 +620,6 @@ export class AuthService {
     isNewUser: boolean;
   } | null> {
     if (typeof window === "undefined") return null;
-
     const pending = sessionStorage.getItem("projecthub_google_redirect_pending");
     if (!pending) return null;
 
@@ -624,24 +627,11 @@ export class AuthService {
       const { getRedirectResult } = await import("firebase/auth");
       const { auth } = await import("./config");
       const result = await getRedirectResult(auth);
-
       sessionStorage.removeItem("projecthub_google_redirect_pending");
-      const storedRole =
-        (sessionStorage.getItem("projecthub_google_redirect_role") as UserRole) ||
-        "student";
+      const storedRole = (sessionStorage.getItem("projecthub_google_redirect_role") as UserRole) || "student";
       sessionStorage.removeItem("projecthub_google_redirect_role");
-
       if (!result?.user?.email) return null;
-
-      return this.signInWithGoogleAccount(
-        {
-          email: result.user.email,
-          displayName: result.user.displayName || result.user.email.split("@")[0],
-          photoURL: result.user.photoURL || undefined,
-        },
-        storedRole,
-        result.user.uid
-      );
+      return this.completeFirebaseSignIn(result.user, storedRole);
     } catch (err) {
       sessionStorage.removeItem("projecthub_google_redirect_pending");
       sessionStorage.removeItem("projecthub_google_redirect_role");
@@ -731,10 +721,14 @@ export class AuthService {
         registry[accountKey] = { user, profile: updated };
         this.saveRegistry(registry);
 
-        // 3. Save to Real Firestore Database
-        await FirestoreService.saveUserProfile(updated);
       } catch (err) {
-        console.error("Failed to update profile:", err);
+        console.error("Failed to cache profile locally:", err);
+      }
+
+      // 3. Save to Firestore — surface failures (e.g. signed-out or suspended) instead of pretending it worked
+      const saved = await FirestoreService.saveUserProfile(updated);
+      if (!saved) {
+        throw new Error("Your profile couldn't be saved to the server. Please sign in again and retry.");
       }
     }
 

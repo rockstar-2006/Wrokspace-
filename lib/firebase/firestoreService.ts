@@ -11,7 +11,10 @@ import {
 } from "firebase/firestore";
 import { db } from "./config";
 import { StudentProfile, Project } from "./types";
-import { generateStudentCode, FEATURED_PROJECTS } from "../data/mockData";
+import { generateStudentCode, FEATURED_PROJECTS, createEmptyStudentProfile } from "../data/mockData";
+
+/** Fields only the Host console (Admin SDK) may set — security rules reject student writes to them. */
+const PROTECTED_PROJECT_FIELDS = ["featured", "reviewNotes", "reviewedBy", "reviewedAt", "reviewHistory", "publishedDate"] as const;
 
 export class FirestoreService {
   /**
@@ -23,49 +26,28 @@ export class FirestoreService {
     uid: string,
     email?: string
   ): Promise<{ profile: StudentProfile | null; isExisting: boolean }> {
-    if (!uid && !email) {
+    // Security rules only allow a signed-in user to read their OWN profile (users/{auth.uid}).
+    // Old profiles stored under other ids are moved by /api/account/claim-legacy instead.
+    void email;
+    if (!uid) {
       return { profile: null, isExisting: false };
     }
 
-    // 1. Check by UID first
-    if (uid) {
-      const userDocRef = doc(db, "users", uid);
-      const docSnap = await getDoc(userDocRef);
+    const userDocRef = doc(db, "users", uid);
+    const docSnap = await getDoc(userDocRef);
+    if (!docSnap.exists()) return { profile: null, isExisting: false };
 
-      if (docSnap.exists()) {
-        const data = docSnap.data() as StudentProfile;
-        if (!Array.isArray(data.skills)) {
-          data.skills = [];
-        }
-        // Ensure studentCode exists
-        if (!data.studentCode) {
-          data.studentCode = generateStudentCode();
-          await setDoc(userDocRef, { studentCode: data.studentCode }, { merge: true });
-        }
-        return { profile: data, isExisting: true };
-      }
+    const data = docSnap.data() as StudentProfile;
+    if (!Array.isArray(data.skills)) data.skills = [];
+    if (!data.uid) data.uid = uid;
+    // Ensure studentCode exists (best effort — e.g. a suspended account can't write)
+    if (!data.studentCode) {
+      data.studentCode = generateStudentCode();
+      try {
+        await setDoc(userDocRef, { studentCode: data.studentCode }, { merge: true });
+      } catch { /* ignore */ }
     }
-
-    // 2. Fallback check by email in Firestore
-    if (email) {
-      const normalizedEmail = email.trim().toLowerCase();
-      const usersRef = collection(db, "users");
-      const q = query(usersRef, where("email", "==", normalizedEmail));
-      const querySnap = await getDocs(q);
-
-      if (!querySnap.empty) {
-        const docData = querySnap.docs[0].data() as StudentProfile;
-        if (!Array.isArray(docData.skills)) {
-          docData.skills = [];
-        }
-        if (!docData.studentCode) {
-          docData.studentCode = generateStudentCode();
-        }
-        return { profile: docData, isExisting: true };
-      }
-    }
-
-    return { profile: null, isExisting: false };
+    return { profile: data, isExisting: true };
   }
 
   /**
@@ -139,56 +121,25 @@ export class FirestoreService {
       }
     }
 
-    // 2. Query Firestore 'users' collection across all students
+    // 2. Ask the server (security rules don't let students read other students' profiles;
+    //    the server returns only the public teammate card)
     try {
-      const usersRef = collection(db, "users");
-
-      // Query by exact studentCode
-      const qCode = query(usersRef, where("studentCode", "==", upper));
-      const snapCode = await getDocs(qCode);
-      if (!snapCode.empty) {
-        return snapCode.docs[0].data() as StudentProfile;
-      }
-
-      // Query by USN
-      const qUsn = query(usersRef, where("usn", "==", upper));
-      const snapUsn = await getDocs(qUsn);
-      if (!snapUsn.empty) {
-        return snapUsn.docs[0].data() as StudentProfile;
-      }
-
-      // Query by Email
-      if (clean.includes("@")) {
-        const qEmail = query(usersRef, where("email", "==", lower));
-        const snapEmail = await getDocs(qEmail);
-        if (!snapEmail.empty) {
-          return snapEmail.docs[0].data() as StudentProfile;
-        }
-      }
-
-      // Broad scan to support normalized code (e.g. without hyphens), suffix matches, or lowercase USNs
-      const allUsersSnap = await getDocs(usersRef);
-      for (const d of allUsersSnap.docs) {
-        const data = d.data() as StudentProfile;
-        if (!data) continue;
-
-        const stuCode = (data.studentCode || "").toUpperCase();
-        const stuNorm = stuCode.replace(/[^A-Z0-9]/g, "");
-        const usnNorm = (data.usn || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-        const emailLower = (data.email || "").toLowerCase();
-
-        if (
-          stuCode === upper ||
-          (stuNorm && stuNorm === normalizedAlphanumeric) ||
-          (normalizedAlphanumeric.length >= 4 && (stuNorm.endsWith(normalizedAlphanumeric) || stuNorm.includes(normalizedAlphanumeric))) ||
-          (usnNorm && usnNorm === normalizedAlphanumeric) ||
-          (emailLower && emailLower === lower)
-        ) {
-          return data;
+      const { auth } = await import("./config");
+      const token = await auth.currentUser?.getIdToken();
+      if (token) {
+        const res = await fetch(`/api/students/lookup?q=${encodeURIComponent(clean)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        });
+        if (res.ok) {
+          const { student } = await res.json();
+          if (student) {
+            return { ...createEmptyStudentProfile(student.uid, student.email, student.fullName, student.role), ...student } as StudentProfile;
+          }
         }
       }
     } catch (err) {
-      console.warn("Firestore findStudent failed:", err);
+      console.warn("Student lookup failed:", err);
     }
 
     return null;
@@ -197,7 +148,7 @@ export class FirestoreService {
   /**
    * Save or update complete user profile in Firestore.
    */
-  static async saveUserProfile(profile: StudentProfile): Promise<boolean> {
+  static async saveUserProfile(profile: StudentProfile, opts: { create?: boolean } = {}): Promise<boolean> {
     if (!profile.uid) return false;
 
     try {
@@ -218,7 +169,6 @@ export class FirestoreService {
         gender: profile.gender || "",
         skills: profile.skills || [],
         bio: profile.bio || "",
-        role: profile.role || "student",
         studentCode: profile.studentCode || generateStudentCode(),
         photoURL: profile.photoURL || "",
         projectsCount: profile.projectsCount || 0,
@@ -227,6 +177,11 @@ export class FirestoreService {
         profileCompleted: Boolean(profile.profileCompleted),
         updatedAt: new Date().toISOString(),
       };
+      // `role` is chosen once at account creation; afterwards only the Host can change it
+      if (opts.create) {
+        cleanData.role = profile.role === "user" ? "user" : "student";
+        cleanData.createdAt = new Date().toISOString();
+      }
 
       await setDoc(userDocRef, cleanData, { merge: true });
       return true;
@@ -276,7 +231,12 @@ export class FirestoreService {
     if (!project.id) return false;
     try {
       const projRef = doc(db, "projects", project.id);
-      await setDoc(projRef, { ...project, updatedAt: new Date().toISOString() }, { merge: true });
+      const data: Record<string, any> = { ...project, updatedAt: new Date().toISOString() };
+      // Review/curation fields belong to the Host; merge keeps their stored values
+      PROTECTED_PROJECT_FIELDS.forEach((k) => delete data[k]);
+      // Firestore rejects undefined values
+      Object.keys(data).forEach((k) => data[k] === undefined && delete data[k]);
+      await setDoc(projRef, data, { merge: true });
       return true;
     } catch (err) {
       console.warn("Firestore saveProject failed or offline:", err);
@@ -401,7 +361,7 @@ export class FirestoreService {
             }
           }
         }
-        success = true;
+        // success reflects the SERVER delete only (a rules denial must not look like success)
       } catch (err) {
         console.warn("LocalStorage delete project failed:", err);
       }

@@ -19,10 +19,7 @@ interface AuthContextType {
   isLoading: boolean;
   setRole: (role: UserRole) => void;
   login: (identifier: string, password: string, role?: UserRole) => Promise<LoginResult>;
-  loginWithGoogle: (
-    role?: UserRole,
-    account?: { email: string; displayName: string; photoURL?: string }
-  ) => Promise<LoginResult>;
+  loginWithGoogle: (role?: UserRole) => Promise<LoginResult>;
   loginWithRealGoogle: (role?: UserRole) => Promise<LoginResult>;
   logout: () => Promise<void>;
   updateProfile: (data: Partial<StudentProfile>) => Promise<boolean>;
@@ -38,21 +35,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+    let unsubscribe: (() => void) | undefined;
+
+    const endSession = () => {
+      AuthService.clearSession();
+      setUser(null);
+      setProfile(createEmptyStudentProfile());
+    };
 
     const init = async () => {
-      // 1. Restore from local cache immediately (zero-flicker)
+      // 1. Restore from local cache immediately (zero-flicker UI), but stay "loading"
+      //    until Firebase Auth confirms the session — Firestore rules need a real token.
       const storedUser = AuthService.getStoredUser();
       const storedProfile = AuthService.getStoredProfile();
       if (storedUser) {
         setUser(storedUser);
         setRoleState(storedUser.role);
       }
-      if (storedProfile?.uid) {
-        setProfile(storedProfile);
-      }
+      if (storedProfile?.uid) setProfile(storedProfile);
 
-      // 2. Check for a pending Google redirect result FIRST
-      //    (happens when signInWithRedirect lands back on the page)
+      // 2. A pending Google redirect result (signInWithRedirect landing back here)
       try {
         const redirectResult = await AuthService.completeGoogleRedirect();
         if (redirectResult && !cancelled) {
@@ -63,113 +65,101 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           return;
         }
       } catch {
-        // no redirect pending — safe to ignore
+        /* no redirect pending */
       }
 
-      // 3. Check for active NextAuth Google OAuth session
-      if (!storedUser && typeof window !== "undefined") {
-        const isLoggedOut = sessionStorage.getItem("projecthub_user_logged_out") === "true";
-        if (!isLoggedOut) {
-          try {
-            const { getSession } = await import("next-auth/react");
-            const session = await getSession();
-            if (session?.user?.email && !cancelled) {
-              const email = session.user.email.toLowerCase();
-              const displayName = session.user.name || email.split("@")[0];
-              const photoURL = session.user.image || "";
-
-              const result = await AuthService.signInWithGoogleAccount(
-                { email, displayName, photoURL },
-                "student"
-              );
-              if (!cancelled) {
-                setUser(result.user);
-                setProfile(result.profile);
-                setRoleState(result.user.role);
-                setIsLoading(false);
-                return;
-              }
+      // 3. Reconcile the cached session with the real Firebase Auth session
+      const { onAuthStateChanged } = await import("firebase/auth");
+      const { auth } = await import("../firebase/config");
+      let first = true;
+      unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
+        if (cancelled || AuthService.signingIn) return;
+        const cached = AuthService.getStoredUser();
+        try {
+          if (!fbUser) {
+            // Signed out, token revoked/disabled by the Host, or a pre-lockdown
+            // localStorage-only session → it can no longer read or write data.
+            if (cached) endSession();
+          } else if (!cached || cached.uid !== fbUser.uid) {
+            // Firebase has a session the app hasn't adopted yet (or a legacy cached uid)
+            const result = await AuthService.completeFirebaseSignIn(fbUser, cached?.role || "student");
+            if (!cancelled) {
+              setUser(result.user);
+              setProfile(result.profile);
+              setRoleState(result.user.role);
             }
-          } catch (e) {
-            console.warn("NextAuth session check error:", e);
+          } else {
+            // Same user: refresh the profile from Firestore (picks up Host changes)
+            const { profile: remote, isExisting } = await FirestoreService.getUserProfile(fbUser.uid);
+            if (cancelled) return;
+            if (isExisting && remote?.accountStatus === "suspended") {
+              const { signOut } = await import("firebase/auth");
+              await signOut(auth).catch(() => {});
+              endSession();
+              if (!window.location.pathname.startsWith("/login") && !window.location.pathname.startsWith("/admin")) {
+                window.location.href = "/login?error=suspended";
+              }
+            } else if (isExisting && remote) {
+              const merged = { ...remote, uid: fbUser.uid };
+              setProfile(merged);
+              const updatedUser = { ...cached, role: remote.role || cached.role };
+              setUser(updatedUser);
+              setRoleState(updatedUser.role);
+              AuthService.saveSession(updatedUser, merged);
+            }
+          }
+        } catch (err: any) {
+          console.warn("Session restore failed:", err);
+          if (String(err?.code || "").startsWith("projecthub/")) endSession();
+        } finally {
+          if (first && !cancelled) {
+            first = false;
+            setIsLoading(false);
           }
         }
-      }
-
-      // 4. Background Firestore sync for existing session
-      if (storedUser?.uid) {
-        FirestoreService.getUserProfile(storedUser.uid, storedUser.email)
-          .then(({ profile: remoteProfile, isExisting }) => {
-            if (isExisting && remoteProfile && !cancelled) {
-              setProfile(remoteProfile);
-              AuthService.saveSession(storedUser, remoteProfile);
-            }
-          })
-          .catch(() => {});
-      }
-
-      if (!cancelled) setIsLoading(false);
+      });
     };
 
     init();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
   }, []);
 
   const setRole = (newRole: UserRole) => {
+    // Only affects the role picked for a brand-new account; an existing account's
+    // role is stored in Firestore and can only be changed by the Host.
     setRoleState(newRole);
-    if (user) {
-      const updatedUser = { ...user, role: newRole };
-      setUser(updatedUser);
-      AuthService.saveSession(updatedUser);
-    }
   };
 
-  const login = async (
-    identifier: string,
-    password: string,
-    loginRole?: UserRole
-  ): Promise<LoginResult> => {
+  const applyResult = (result: { user: AuthUser; profile: StudentProfile; isNewUser: boolean }): LoginResult => {
+    setUser(result.user);
+    setProfile(result.profile);
+    setRoleState(result.user.role);
+    if (typeof window !== "undefined") sessionStorage.removeItem("projecthub_user_logged_out");
+    return {
+      success: true,
+      isNewUser: result.isNewUser,
+      profileCompleted: result.profile.profileCompleted,
+    };
+  };
+
+  /** Email / USN + password. Throws with a Firebase/portal error code on failure. */
+  const login = async (identifier: string, password: string, loginRole?: UserRole): Promise<LoginResult> => {
     setIsLoading(true);
     try {
-      const activeRole = loginRole || role;
-      const result = await AuthService.signIn(identifier, password, activeRole);
-      setUser(result.user);
-      setProfile(result.profile);
-      setRoleState(activeRole);
-      return {
-        success: true,
-        isNewUser: result.isNewUser,
-        profileCompleted: result.profile.profileCompleted,
-      };
-    } catch (err) {
-      console.error("Login failed:", err);
-      return { success: false, isNewUser: false, profileCompleted: false };
+      return applyResult(await AuthService.signIn(identifier, password, loginRole || role));
     } finally {
       setIsLoading(false);
     }
   };
 
-  const loginWithGoogle = async (
-    googleRole?: UserRole,
-    account?: { email: string; displayName: string; photoURL?: string }
-  ): Promise<LoginResult> => {
+  /** Kept for compatibility: always real Google OAuth (the old "pick a saved account" path is gone). */
+  const loginWithGoogle = async (googleRole?: UserRole): Promise<LoginResult> => {
     setIsLoading(true);
     try {
-      const activeRole = googleRole || role;
-      const result = account
-        ? await AuthService.signInWithGoogleAccount(account, activeRole)
-        : await AuthService.signInWithGoogle(activeRole);
-      setUser(result.user);
-      setProfile(result.profile);
-      setRoleState(activeRole);
-      return {
-        success: true,
-        isNewUser: result.isNewUser,
-        profileCompleted: result.profile.profileCompleted,
-      };
-    } catch (err) {
-      console.error("Google sign in failed:", err);
-      throw err;
+      return applyResult(await AuthService.signInWithGoogle(googleRole || role));
     } finally {
       setIsLoading(false);
     }
@@ -178,18 +168,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const loginWithRealGoogle = async (googleRole?: UserRole): Promise<LoginResult> => {
     setIsLoading(true);
     try {
-      const activeRole = googleRole || role;
-      const result = await AuthService.signInWithRealGoogle(activeRole);
-      setUser(result.user);
-      setProfile(result.profile);
-      setRoleState(activeRole);
-      return {
-        success: true,
-        isNewUser: result.isNewUser,
-        profileCompleted: result.profile.profileCompleted,
-      };
-    } catch (err: any) {
-      throw err;
+      return applyResult(await AuthService.signInWithRealGoogle(googleRole || role));
     } finally {
       setIsLoading(false);
     }
@@ -199,10 +178,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (typeof window !== "undefined") {
       sessionStorage.setItem("projecthub_user_logged_out", "true");
     }
-    try {
-      const { signOut } = await import("next-auth/react");
-      await signOut({ redirect: false });
-    } catch { /* ignore */ }
     // Sign out of Firebase Auth SDK too so redirect state is cleared
     try {
       const { signOut } = await import("firebase/auth");

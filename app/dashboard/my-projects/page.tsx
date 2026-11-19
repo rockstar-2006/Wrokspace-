@@ -106,7 +106,9 @@ export default function MyProjectsPage() {
     }
     setDeletingId(id);
     try {
-      await FirestoreService.deleteProject(id, profile?.uid);
+      if (!(await FirestoreService.deleteProject(id, profile?.uid))) {
+        throw new Error("Server rejected the delete");
+      }
       setMyProjects((prev) => prev.filter((p) => p.id !== id));
     } catch (err) {
       console.error("Failed to delete project:", err);
@@ -128,7 +130,9 @@ export default function MyProjectsPage() {
       };
 
       // Save to Firestore
-      await FirestoreService.saveProject(updated);
+      if (!(await FirestoreService.saveProject(updated))) {
+        throw new Error("Server rejected the update");
+      }
 
       // Update local storage
       const userProjectsKey = profile?.uid
@@ -417,6 +421,7 @@ export default function MyProjectsPage() {
               {filtered.map((proj) => {
                 const isPub = proj.status === "Published";
                 const isRev = proj.status === "Under Review" || proj.status === "Pending review";
+                const isNeedsWork = proj.status === "Changes requested" || proj.status === "Rejected";
 
                 return (
                   <div
@@ -444,6 +449,8 @@ export default function MyProjectsPage() {
                                   ? "bg-emerald-50 text-emerald-600 border border-emerald-200"
                                   : isRev
                                   ? "bg-amber-50 text-amber-600 border border-amber-200"
+                                  : isNeedsWork
+                                  ? "bg-rose-50 text-rose-600 border border-rose-200"
                                   : "bg-slate-100 text-slate-600"
                               }`}
                             >
@@ -453,6 +460,8 @@ export default function MyProjectsPage() {
                                     ? "bg-emerald-500"
                                     : isRev
                                     ? "bg-amber-500"
+                                    : isNeedsWork
+                                    ? "bg-rose-500"
                                     : "bg-slate-400"
                                 }`}
                               />
@@ -490,8 +499,8 @@ export default function MyProjectsPage() {
 
                       {/* Right: Actions */}
                       <div className="flex items-center gap-2.5 shrink-0 self-end md:self-center">
-                        {/* Submit for Review Button for Drafts */}
-                        {proj.status === "Draft" && (
+                        {/* Submit for Review Button for Drafts (and resubmission after reviewer feedback) */}
+                        {(proj.status === "Draft" || proj.status === "Changes requested") && (
                           <button
                             type="button"
                             disabled={submittingReviewId === proj.id}
@@ -500,7 +509,13 @@ export default function MyProjectsPage() {
                             title="Submit draft to faculty reviewers for approval"
                           >
                             <Send className={`w-3.5 h-3.5 ${submittingReviewId === proj.id ? "animate-spin" : ""}`} />
-                            <span>{submittingReviewId === proj.id ? "Submitting..." : "Submit for Review"}</span>
+                            <span>
+                              {submittingReviewId === proj.id
+                                ? "Submitting..."
+                                : proj.status === "Changes requested"
+                                ? "Resubmit for Review"
+                                : "Submit for Review"}
+                            </span>
                           </button>
                         )}
 
@@ -531,6 +546,27 @@ export default function MyProjectsPage() {
                         </button>
                       </div>
                     </div>
+
+                    {/* Reviewer feedback from the Host / faculty */}
+                    {proj.reviewNotes && proj.status !== "Published" && (
+                      <div
+                        className={`rounded-2xl border px-4 py-3 text-xs ${
+                          proj.status === "Rejected"
+                            ? "bg-rose-50 border-rose-200 text-rose-800"
+                            : proj.status === "Changes requested"
+                            ? "bg-orange-50 border-orange-200 text-orange-900"
+                            : "bg-slate-50 border-slate-200 text-slate-700"
+                        }`}
+                      >
+                        <p className="font-black uppercase tracking-wider text-[10px] mb-1">
+                          Reviewer feedback{proj.reviewedBy ? ` · ${proj.reviewedBy}` : ""}
+                        </p>
+                        <p className="whitespace-pre-wrap font-medium leading-relaxed">{proj.reviewNotes}</p>
+                        {proj.status === "Changes requested" && (
+                          <p className="mt-1.5 font-bold">Edit your project, then press “Resubmit for Review”.</p>
+                        )}
+                      </div>
+                    )}
 
                     {/* Bottom Section: Review Lifecycle 4-Stage Stepper */}
                     <ProjectReviewTimeline

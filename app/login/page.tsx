@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Mail, Lock, Eye, EyeOff, ArrowRight, Send, AlertCircle } from "lucide-react";
 import { useAuth } from "@/lib/context/AuthContext";
+import { AuthService } from "@/lib/firebase/authService";
 import RoleSelector from "@/components/auth/RoleSelector";
 import ProjectShowcase3D from "@/components/auth/ProjectShowcase3D";
 
@@ -25,7 +26,15 @@ function getFirebaseErrorMessage(code: string): string {
     case "auth/user-disabled":
       return "This account has been disabled. Contact support.";
     case "auth/operation-not-allowed":
-      return "Google sign-in is not enabled. Enable it in Firebase Console → Authentication → Sign-in method.";
+      return "This sign-in method is not enabled. Enable it in Firebase Console → Authentication → Sign-in method.";
+    case "auth/wrong-password":
+      return "Incorrect password. If you created this account with Google, use “Continue with Google” instead.";
+    case "auth/weak-password":
+      return "Choose a password with at least 6 characters.";
+    case "auth/invalid-email":
+      return "That doesn't look like a valid email address or register number.";
+    case "auth/missing-password":
+      return "Please enter your password.";
     default:
       return `Sign-in error (${code}). Please try again or use a saved account.`;
   }
@@ -67,7 +76,9 @@ export default function LoginPage() {
       const params = new URLSearchParams(window.location.search);
       const err = params.get("error");
       if (err) {
-        if (err === "OAuthCallback") {
+        if (err === "suspended") {
+          setErrorMessage("This account has been suspended by the portal administrator. Contact your department if you think this is a mistake.");
+        } else if (err === "OAuthCallback") {
           setErrorMessage("Google Sign-In returned an OAuth verification mismatch. You can also pick or enter your campus Google account directly.");
         } else {
           setErrorMessage(`Sign-in error (${err}). Please try again.`);
@@ -96,11 +107,37 @@ export default function LoginPage() {
       } else {
         setErrorMessage("Sign-in failed. Please check your credentials and try again.");
       }
-    } catch {
-      setErrorMessage("An unexpected error occurred. Please try again.");
+    } catch (err: any) {
+      const code = String(err?.code || "");
+      setErrorMessage(
+        code.startsWith("projecthub/")
+          ? err.message
+          : code.startsWith("auth/")
+          ? getFirebaseErrorMessage(code)
+          : err?.message || "An unexpected error occurred. Please try again."
+      );
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  // ── Password reset (Firebase emails a reset link) ─────────────────────────
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
+  const handleForgotPassword = async () => {
+    setErrorMessage(null);
+    setInfoMessage(null);
+    const id = identifier.trim();
+    if (!id) {
+      setErrorMessage("Enter your email address above, then press “Forgot password?”.");
+      return;
+    }
+    if (!id.includes("@")) {
+      setErrorMessage("Register-number accounts have no inbox for a reset link. Ask the portal administrator to reset your account.");
+      return;
+    }
+    const ok = await AuthService.sendPasswordReset(id.toLowerCase());
+    if (ok) setInfoMessage(`If an account exists for ${id}, a password-reset link is on its way. Check your inbox and spam folder.`);
+    else setErrorMessage("Couldn't send the reset email. Please try again in a moment.");
   };
 
   // ── Real Google OAuth ───────────────────────────────────────────────────────
@@ -122,6 +159,16 @@ export default function LoginPage() {
         return;
       }
       console.warn("Firebase Google popup error:", firebaseErr);
+      if (code.startsWith("projecthub/")) {
+        // Blocked by the Host's portal policy — also drop the Firebase Google session
+        try {
+          const { signOut } = await import("firebase/auth");
+          const { auth } = await import("@/lib/firebase/config");
+          await signOut(auth);
+        } catch { /* ignore */ }
+        setErrorMessage(firebaseErr.message);
+        return;
+      }
       setErrorMessage(
         code ? getFirebaseErrorMessage(code) : firebaseErr?.message || "Google sign-in failed. Please try again."
       );
@@ -185,6 +232,12 @@ export default function LoginPage() {
                 <p className="text-red-600 text-xs font-semibold leading-snug">{errorMessage}</p>
               </div>
             )}
+            {infoMessage && !errorMessage && (
+              <div role="status" className="mb-3 p-2.5 rounded-xl bg-emerald-50 border border-emerald-200/60 flex items-start gap-2">
+                <Send className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                <p className="text-emerald-700 text-xs font-semibold leading-snug">{infoMessage}</p>
+              </div>
+            )}
 
             {/* Email / USN form */}
             <form onSubmit={handleSubmit} className="space-y-3.5">
@@ -243,7 +296,7 @@ export default function LoginPage() {
                 </label>
                 <button
                   type="button"
-                  onClick={() => alert("Please contact your campus department coordinator to reset credentials.")}
+                  onClick={handleForgotPassword}
                   className="font-bold text-[#FF5A36] hover:text-[#E04826] transition-colors"
                 >
                   Forgot password?
@@ -289,16 +342,11 @@ export default function LoginPage() {
               <span>Continue with Google</span>
             </button>
 
-            <div className="mt-4 text-center text-[11px] text-slate-500">
-              <span>Don&apos;t have an account? </span>
-              <button
-                type="button"
-                onClick={() => alert("Student accounts are created automatically on first Google sign-in or email entry.")}
-                className="font-bold text-[#FF5A36] hover:underline"
-              >
-                Sign in to auto-register
-              </button>
-            </div>
+            <p className="mt-4 text-center text-[11px] text-slate-500 leading-relaxed">
+              <span className="font-bold text-slate-700">First time here?</span> Enter your email or register number and
+              choose a password (6+ characters). Your account is created automatically, and an existing ProjectHub
+              profile with the same email/USN is carried over.
+            </p>
           </div>
 
           {/* Footer */}

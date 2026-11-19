@@ -9,6 +9,7 @@ import DashboardHeader from "@/components/dashboard/DashboardHeader";
 import WelcomeBanner3D from "@/components/dashboard/WelcomeBanner3D";
 import ProjectCard from "@/components/dashboard/ProjectCard";
 import ProjectCardSkeleton from "@/components/dashboard/ProjectCardSkeleton";
+import PortalAnnouncement from "@/components/dashboard/PortalAnnouncement";
 import SplitTextHeading from "@/components/animations/SplitTextHeading";
 import TypewriterText from "@/components/animations/TypewriterText";
 import PageTransitionWrapper from "@/components/animations/PageTransitionWrapper";
@@ -74,17 +75,27 @@ export default function StudentDashboardPage() {
         // Fetch published projects + user's submitted projects from Firestore database
         const dbProjects = await FirestoreService.getAllDashboardProjects(user?.uid);
 
-        // Merge with deduplication by ID (prioritizing user submissions)
+        // Merge with deduplication by ID. Firestore is the source of truth (it carries the
+        // Host's review decisions); local copies only fill in projects not yet synced.
+        // Local copies of other students' projects are only shown if they're published.
         const map = new Map<string, Project>();
-        userProjects.forEach((p) => map.set(p.id, p));
-        globalProjects.forEach((p) => {
+        dbProjects.forEach((p) => map.set(p.id, p));
+        userProjects.forEach((p) => {
           if (!map.has(p.id)) map.set(p.id, p);
         });
-        dbProjects.forEach((p) => {
-          if (!map.has(p.id)) map.set(p.id, p);
+        globalProjects.forEach((p) => {
+          if (map.has(p.id)) return;
+          if (p.status === "Published" || (user?.uid && p.ownerId === user.uid)) map.set(p.id, p);
         });
 
-        setProjectsList(Array.from(map.values()));
+        // Projects the Host has archived or rejected never appear in the public feed
+        const visible = Array.from(map.values()).filter(
+          (p) => (p.status !== "Archived" && p.status !== "Rejected") || p.ownerId === user?.uid
+        );
+        // Featured (curated by the Host) first
+        visible.sort((a, b) => Number(Boolean(b.featured)) - Number(Boolean(a.featured)));
+
+        setProjectsList(visible);
       } catch (err) {
         console.warn("Failed to load projects:", err);
         setProjectsList([]);
@@ -163,6 +174,8 @@ export default function StudentDashboardPage() {
         />
 
         <PageTransitionWrapper className="p-6 sm:p-10 max-w-[1340px] mx-auto w-full relative z-10">
+          <PortalAnnouncement />
+
           {/* Welcome Banner with 3D Code Graphic, Parallax, & Category Flip */}
           <WelcomeBanner3D
             activeCategory={selectedCategory}

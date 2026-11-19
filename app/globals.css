@@ -96,3 +96,9 @@
 .animate-float-aura {
   animation: float-aura 3s ease-in-out infinite;
 }
+
+/* Admin console drawer entrance */
+@keyframes slideIn {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}

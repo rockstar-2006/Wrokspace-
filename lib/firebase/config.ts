@@ -2,16 +2,9 @@ import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
+import { firebaseConfig } from "./firebaseConfig";
 
-export const firebaseConfig = {
-  apiKey: "AIzaSyCzh4kgWukR-9igXPRZ0aOruR7TUWGPf1A",
-  authDomain: "workspace-aed6b.firebaseapp.com",
-  projectId: "workspace-aed6b",
-  storageBucket: "workspace-aed6b.firebasestorage.app",
-  messagingSenderId: "62324460523",
-  appId: "1:62324460523:web:631f077d2cab1e07f427ae",
-  measurementId: "G-8J4FBSB3HT",
-};
+export { firebaseConfig };
 
 // Initialize Firebase App singleton safely for both client and SSR
 export const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
